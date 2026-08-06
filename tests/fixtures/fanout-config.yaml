@@ -1,0 +1,5 @@
+orchestrator:
+  state_db: var/worker2-validation.db
+  artifact_dir: var/worker2-validation-jobs
+  max_workers: 3
+  parser_chunk_size: 2

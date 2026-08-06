@@ -1,0 +1,16 @@
+project:
+  exclude_patterns:
+    - .git
+    - slprj
+    - build
+  entry_points: []
+
+logging:
+  level: INFO
+  format: console
+
+orchestrator:
+  state_db: var/refactor-agent.db
+  artifact_dir: var/jobs
+  max_workers: 4
+  parser_chunk_size: 100
