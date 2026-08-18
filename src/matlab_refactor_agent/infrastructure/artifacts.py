@@ -36,6 +36,15 @@ class ArtifactStore:
         temporary.replace(path)
         return str(path)
 
+    def write_text(self, job_id: str, name: str, content: str) -> str:
+        """作用：原子写入非 JSON 报告；输入：Job ID、文件名和文本；输出：安全 artifact 引用。"""
+
+        path = self._job_path(job_id, name)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+        return str(path)
+
     def read_model(self, reference: str, model_type: type[ModelT]) -> ModelT:
         """作用：恢复 artifact 模型；输入：引用和模型类型；输出：校验后模型；数据流：路径校验 -> JSON 读取 -> Pydantic。"""
 
@@ -43,6 +52,15 @@ class ArtifactStore:
         try:
             return model_type.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
+            raise ArtifactError(f"无法读取 artifact {path}: {exc}") from exc
+
+    def read_text(self, reference: str) -> str:
+        """作用：读取受根目录保护的文本 artifact；输入：引用；输出：UTF-8 文本。"""
+
+        path = self._resolve_reference(reference)
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
             raise ArtifactError(f"无法读取 artifact {path}: {exc}") from exc
 
     def _job_path(self, job_id: str, name: str) -> Path:

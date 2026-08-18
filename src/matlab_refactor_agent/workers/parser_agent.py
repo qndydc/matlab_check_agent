@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
-from matlab_refactor_agent.capabilities.parser import MaxxMatlabParser
+from matlab_refactor_agent.workers.matlab_parser import MaxxMatlabParser
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.exceptions import ArtifactError, OrchestrationError
 from matlab_refactor_agent.domain.models import (

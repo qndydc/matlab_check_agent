@@ -22,6 +22,7 @@ def test_orchestrator_persists_worker_pipeline(tmp_path: Path) -> None:
     settings = AppSettings(
         orchestrator={
             "state_db": database,
+            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": artifact_dir,
             "parser_chunk_size": 3,
         }
@@ -62,6 +63,7 @@ def test_orchestrator_scan_runs_scanner_parser_fanout_and_aggregate(
     settings = AppSettings(
         orchestrator={
             "state_db": database,
+            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": tmp_path / "jobs",
             "parser_chunk_size": 3,
         }
@@ -81,24 +83,23 @@ def test_orchestrator_scan_runs_scanner_parser_fanout_and_aggregate(
     assert len(outcome.result.files) == 7
 
 
-def test_status_command_reads_persisted_job(tmp_path: Path) -> None:
-    """作用：验证状态查询 CLI；输入：已完成 Job 和临时 YAML；输出：退出码断言；数据流：status 参数 -> SQLiteStateManager -> 终端。"""
+def test_status_command_reads_persisted_job(tmp_path: Path, monkeypatch) -> None:
+    """作用：验证状态查询 CLI；输入：已完成 Job 和临时环境配置；输出：退出码断言；数据流：status 参数 -> SQLiteStateManager -> 终端。"""
 
     database = tmp_path / "state.db"
     artifact_dir = tmp_path / "jobs"
     settings = AppSettings(
-        orchestrator={"state_db": database, "artifact_dir": artifact_dir}
+        orchestrator={
+            "state_db": database,
+            "checkpoint_db": tmp_path / "checkpoints.db",
+            "artifact_dir": artifact_dir,
+        }
     )
     outcome = Orchestrator.from_settings(settings).run_scan(FIXTURE)
-    config = tmp_path / "config.yaml"
-    config.write_text(
-        "orchestrator:\n"
-        f"  state_db: '{database.as_posix()}'\n"
-        f"  artifact_dir: '{artifact_dir.as_posix()}'\n",
-        encoding="utf-8",
-    )
+    monkeypatch.setenv("MATLAB_REFACTOR_STATE_DB", str(database))
+    monkeypatch.setenv("MATLAB_REFACTOR_ARTIFACT_DIR", str(artifact_dir))
 
-    exit_code = main(["--config", str(config), "status", outcome.job_id])
+    exit_code = main(["status", outcome.job_id])
 
     assert exit_code == 0
 
@@ -112,6 +113,7 @@ def test_empty_project_still_runs_parser_aggregate(tmp_path: Path) -> None:
     settings = AppSettings(
         orchestrator={
             "state_db": database,
+            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": tmp_path / "jobs",
             "parser_chunk_size": 2,
         }

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from matlab_refactor_agent.capabilities.visualizer import (
+from matlab_refactor_agent.workers.graph_output import (
     build_graph_document,
     render_dependency_tree,
     write_graph_json,

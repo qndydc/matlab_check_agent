@@ -9,7 +9,9 @@ venv/
 .env
 dist/
 build/
+node_modules/
+*.tsbuildinfo
 var/
 .idea/
 .vscode/
-
+tests/fixtures/matlab_projects/matlab2tikz-master/

@@ -1,5 +1,5 @@
 """
-Description: 定义项目、配置、artifact、Worker、冲突和质量门禁异常层级。
+Description: 定义项目、配置、artifact、Worker、Agent、冲突和质量门禁异常层级。
 References: Python Exception。
 Referenced By: 全部能力层、基础设施层、调度层和 CLI。
 """
@@ -17,7 +17,7 @@ class ParserUnavailableError(MatlabRefactorError):
 
 
 class ConfigurationError(MatlabRefactorError):
-    """作用：报告配置读取或校验失败；输入：YAML/模型错误；输出：业务异常；数据流：配置加载 -> CLI。"""
+    """作用：报告配置读取或校验失败；输入：环境变量/模型错误；输出：业务异常；数据流：配置加载 -> CLI。"""
 
 
 class OrchestrationError(MatlabRefactorError):
@@ -26,6 +26,10 @@ class OrchestrationError(MatlabRefactorError):
 
 class WorkerNotFoundError(OrchestrationError):
     """作用：报告 Worker 未注册；输入：Worker 类型；输出：调度异常；数据流：WorkerPool -> Orchestrator。"""
+
+
+class LLMClientError(OrchestrationError):
+    """作用：报告 LLM 请求、空响应或结构化校验失败；输入：SDK/响应错误；输出：不泄露密钥的业务异常。"""
 
 
 class QualityGateError(OrchestrationError):
@@ -38,3 +42,7 @@ class ArtifactError(OrchestrationError):
 
 class ConflictError(OrchestrationError):
     """作用：报告多个任务的资源声明冲突；输入：冲突路径和任务；输出：调度异常；数据流：ConflictResolver -> Orchestrator。"""
+
+
+class ChangeSetExecutionError(OrchestrationError):
+    """作用：报告隔离复制、路径改写或源树完整性失败；输入：执行错误；输出：安全中止。"""

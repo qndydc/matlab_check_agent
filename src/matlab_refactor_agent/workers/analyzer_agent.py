@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
-from matlab_refactor_agent.capabilities.analyzer import DependencyAnalyzer
+from matlab_refactor_agent.workers.dependency_analysis import DependencyAnalyzer
+#该analyser的职责不是重新实现图算法，而是把 DependencyAnalyzer 接入统一 Worker 系统。
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.models import ScanResult
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
@@ -42,10 +43,11 @@ class AnalyzerAgent(BaseWorker):
         scan = context.artifact_store.read_model(
             str(task.payload["scan_result"]), ScanResult
         )
+        # analyze为DependencyAnalyzer的核心方法，返回AnalysisResult
         result = self._analyzer.analyze(scan, self._entry_points)
         reference = context.artifact_store.write_model(
             task.job_id, "analysis-result.json", result
-        )
+        ) #输出json文件，供后续可视化或其他分析使用
         return WorkerResult(
             task_id=task.task_id,
             success=True,
@@ -53,7 +55,7 @@ class AnalyzerAgent(BaseWorker):
             metrics={
                 "node_count": len(result.functions),
                 "edge_count": len(result.dependencies),
-                "cycle_count": len(result.cycles),
+                "cycle_count": len(result.cycle_clusters),
                 "orphan_count": len(result.orphans),
             },
         )

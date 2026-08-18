@@ -99,3 +99,9 @@ class QualityGate:
             unknown = set(cycle) - known
             if unknown:
                 raise QualityGateError(f"循环依赖引用未知节点: {sorted(unknown)}")
+        for cluster in analysis.cycle_clusters:
+            unknown = set(cluster) - known
+            if unknown:
+                raise QualityGateError(f"循环簇引用未知节点: {sorted(unknown)}")
+            if len(cluster) < 2:
+                raise QualityGateError("循环簇必须至少包含两个节点")

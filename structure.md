@@ -1,149 +1,289 @@
-# 项目文件夹结构
+# 项目结构
 
-本文档记录 MATLAB Refactor Agent 当前的目录结构及重要文件用途。`.git`、Python 缓存、测试缓存和包构建元数据未展开；`var/` 仅记录关键运行产物类型。
+本文面向维护者，描述当前仓库结构、模块调用方向，以及一个 MATLAB 项目从输入到隔离输出代码库的完整过程。内容以当前 `src/` 实现为准。
 
-本文展示的是**当前已落地结构**。四大子系统、Multi-Agent 拆分和未来目标目录以 [`项目文件规划.md`](项目文件规划.md) 的 v2 规划为准；后续按里程碑渐进迁移，不一次性破坏现有模块。
+## 架构原则
+
+1. `domain` 定义跨层 Pydantic 数据契约，不依赖具体基础设施。
+2. `workers` 集中承载扫描、分块解析、依赖分析和图输出等确定性能力。
+3. `agents` 只负责需要语义推理的结构化建议，不直接修改 MATLAB 文件。
+4. `orchestration` 是唯一跨阶段控制流，负责并行、checkpoint、审批、执行和验证。
+5. 大型结果写入 ArtifactStore；LangGraph State 只保存控制字段和 artifact 引用。
+6. 输入项目只读，所有修改发生在隔离输出目录。
+
+## 顶层目录
 
 ```text
 matlab_check_agent/
-├── .env.example                         # 环境变量模板；不保存真实密钥
-├── .gitignore                           # Git 忽略规则
-├── config.example.yaml                  # CLI 项目扫描和日志配置示例
-├── pyproject.toml                       # Python 包、依赖、CLI 入口和测试配置
-├── README.md                            # 安装、使用、输出语义和开发约定
-├── structure.md                         # 当前项目目录结构说明
-├── 设计文档.md                           # 系统目标、总体架构和完整功能设计
-├── 项目文件规划.md                        # 分阶段目录规划和实施路线
-│
-├── docs/
-│   └── orchestrator-worker.md            # 多 Worker 职责、状态流和大库分片原则
-│
-├── src/
-│   └── matlab_refactor_agent/           # Python 主程序包
-│       ├── __init__.py                  # 包版本信息
-│       ├── __main__.py                  # `python -m matlab_refactor_agent` 入口
-│       │
-│       ├── application/                 # 应用用例编排层
-│       │   ├── __init__.py
-│       │   └── services.py              # 通过 Orchestrator 提供 scan/analyze 用例
-│       │
-│       ├── capabilities/                # 可独立替换和测试的核心能力
-│       │   ├── __init__.py
-│       │   ├── analyzer/
-│       │   │   ├── __init__.py
-│       │   │   └── dependency_graph.py # 构建调用图，检测循环、孤立和核心函数
-│       │   ├── parser/
-│       │   │   ├── __init__.py
-│       │   │   ├── base.py              # MATLAB 解析器协议接口
-│       │   │   ├── matlab_scanner.py    # 文件发现器及兼容同步扫描器
-│       │   │   └── maxx_parser.py       # maxx 适配器；提取签名、作用域和调用信息
-│       │   └── visualizer/
-│       │       ├── __init__.py
-│       │       └── dependency_view.py   # 终端调用树、Graph JSON 和 Mermaid 导出
-│       │
-│       ├── domain/                      # 无 UI 依赖的领域数据和错误定义
-│       │   ├── __init__.py
-│       │   ├── enums.py                 # MATLAB、Job、Task 和 Worker 状态枚举
-│       │   ├── exceptions.py            # 路径、配置、调度、冲突和质量门禁异常
-│       │   ├── models.py                # FunctionInfo、ScanResult、AnalysisResult 等模型
-│       │   └── orchestration.py         # Job、Task、WorkerResult 和 Outcome 契约
-│       │
-│       ├── infrastructure/              # 配置、日志等外部基础设施适配
-│       │   ├── __init__.py
-│       │   ├── artifacts.py             # Job 隔离的大对象 JSON 存储及路径安全
-│       │   ├── config.py                # 加载 YAML 并通过 Pydantic 严格校验
-│       │   └── logging.py               # 标准日志初始化
-│       │
-│       ├── orchestration/               # Orchestrator 控制组件
-│       │   ├── __init__.py
-│       │   ├── conflict_resolver.py     # Worker 路径读写声明与冲突仲裁
-│       │   ├── orchestrator.py          # Job 流程、任务依赖和失败边界
-│       │   ├── quality_gate.py          # 阶段 artifact 和图不变量校验
-│       │   ├── state_manager.py         # SQLite Job/Task 状态持久化
-│       │   ├── task_queue.py            # 稳定优先级任务队列
-│       │   └── worker_pool.py           # Worker 注册、生命周期和任务路由
-│       │
-│       ├── interfaces/                  # 用户接口层
-│       │   ├── __init__.py
-│       │   └── cli/
-│       │       ├── __init__.py
-│       │       ├── main.py              # scan/analyze/status 命令和 JSON 输出
-│       │       └── render.py            # 分析、调用树和 Job 状态渲染
-│       │
-│       └── workers/                     # 七类 Worker 的统一边界
-│           ├── __init__.py
-│           ├── base.py                  # BaseWorker 和 WorkerContext
-│           ├── scanner_agent.py         # Worker-1：发现文件并生成稳定清单
-│           ├── parser_agent.py          # Worker-2：分片解析、完整性校验和聚合
-│           ├── analyzer_agent.py        # Worker-3：依赖图和指标分析
-│           ├── planner_agent.py         # 旧 Worker-4 预留；将由多个专责 Agent 替代
-│           ├── executor_agent.py        # Worker-5：重构执行预留接口及演示入口
-│           ├── validator_agent.py       # 验证 Agent 预留接口及演示入口
-│           ├── reporter_agent.py        # 自然语言报告 Agent 预留接口及演示入口
-│           └── reserved_agents.py       # 未实现 Worker 的共享安全基类
-│
-├── tests/
-│   ├── fixtures/
-│   │   ├── fanout-config.yaml           # Worker-2 小分片 CLI 验证配置
-│   │   └── matlab_projects/
-│   │       └── basic/                   # 小型 MATLAB 集成测试项目
-│   │           ├── +utils/
-│   │           │   └── normalize.m      # MATLAB package 函数样例
-│   │           ├── build/
-│   │           │   └── ignored.m        # 验证 build 目录排除规则的样例
-│   │           ├── cycleA.m             # 循环依赖节点 A
-│   │           ├── cycleB.m             # 循环依赖节点 B
-│   │           ├── loadValues.m         # 普通独立函数样例
-│   │           ├── main.m               # 脚本入口样例
-│   │           ├── orphan.m             # 孤立函数样例
-│   │           └── processData.m        # 主函数及局部函数样例
-│   ├── integration/
-│   │   ├── test_cli.py                  # 从 CLI 到 JSON 报告的集成测试
-│   │   └── test_orchestrator.py         # Worker 流水线、SQLite 和 status 测试
-│   ├── unit/
-│   │   ├── test_module_headers.py       # 强制检查所有 `.py` 文件标准模块头
-│   │   ├── workers/
-│   │   │   └── test_worker_entrypoints.py # 七类 Worker 独立演示入口测试
-│   │   ├── analyzer/
-│   │   │   └── test_dependency_graph.py # 依赖图、入口点和作用域消歧测试
-│   │   ├── orchestration/
-│   │   │   └── test_components.py       # 队列、artifact 和冲突仲裁测试
-│   │   ├── parser/
-│   │   │   ├── test_maxx_parser.py      # 函数签名、包、类和局部函数解析测试
-│   │   │   └── test_scanner.py          # 文件发现及排除规则测试
-│   │   └── visualizer/
-│   │       └── test_dependency_view.py  # 图契约、终端树和 Mermaid 导出测试
-│
-└── var/                                 # 运行时输出，不纳入 Git
-    ├── jobs/<job-id>/                   # Worker 间传递的大型 artifact
-    ├── refactor-agent.db                # Orchestrator Job/Task SQLite 状态库
-    ├── dependency-graph.json            # Web-ready 节点/边图数据样例
-    ├── dependency-graph.mmd             # Mermaid 函数调用图样例
-    ├── matlab-check-analysis.json       # matlab_check 环境生成的分析样例
-    └── sample-analysis.json             # 开发验证生成的分析样例
+├── README.md                   GitHub 用户安装与使用指南
+├── structure.md                当前代码结构与数据流
+├── 项目规划.md                  完成情况与后续路线
+├── pyproject.toml              包、依赖、CLI 和测试配置
+├── .env.example               完整环境变量模板
+├── src/matlab_refactor_agent/ Python 源码
+├── tests/                     单元、集成测试和 MATLAB fixture
+└── var/                       运行产物；被 Git 忽略
 ```
 
-## 代码数据流
+## `src` 调用方向
+
+```mermaid
+flowchart LR
+    CLI[interfaces] --> APP[application]
+    APP --> ORCH[orchestration]
+    ORCH --> WORKERS[workers]
+    ORCH --> AGENTS[agents]
+    WORKERS --> INFRA[infrastructure]
+    AGENTS --> INFRA
+    ORCH --> INFRA
+    CLI -.模型.-> DOMAIN[domain]
+    APP -.模型.-> DOMAIN
+    ORCH -.模型.-> DOMAIN
+    WORKERS -.模型.-> DOMAIN
+    AGENTS -.模型.-> DOMAIN
+    INFRA -.异常/模型.-> DOMAIN
+```
+
+上层可以调用下层；`domain` 是共享契约。确定性 Worker 和 LLM Agent 不互相直接调度，而是由 LangGraph 工作流协调。
+
+## 源码文件说明
+
+### 包入口
 
 ```text
-CLI 参数
-  -> infrastructure/config.py 加载配置
-  -> application/services.py 请求 Orchestrator 用例
-  -> orchestration/orchestrator.py 创建 Job 和阶段任务
-  -> workers/scanner_agent.py 发现文件并写 file-manifest artifact
-  -> orchestrator 按 parser_chunk_size fan-out Worker-2 并发解析任务
-  -> workers/parser_agent.py 校验并聚合分片，写 scan-result artifact
-  -> workers/analyzer_agent.py 读取 scan 引用、分析调用图并写 analysis artifact
-  -> quality_gate.py 校验，state_manager.py 持久化状态
-  -> capabilities/visualizer/dependency_view.py 投影终端树/Graph JSON/Mermaid
-  -> interfaces/cli/render.py 或 main.py 输出结果
+src/matlab_refactor_agent/
+├── __init__.py       包版本
+└── __main__.py       python -m 入口，转发到 CLI main()
 ```
 
-## 维护约定
+### `interfaces`：用户接口
 
-- 新增、删除或移动重要文件后，应同步更新本文档。
-- 缓存、构建产物、虚拟环境和临时分析结果不应逐项记录。
-- 新增重要文件时，目录树注释应说明其职责，而不是复述文件名。
-- Python 函数和类继续遵循 README 中的“作用、输入、输出、数据流”注释头规范。
-- 所有 `.py` 文件必须包含 `Description`、`References`、`Referenced By` 模块头，并由自动化测试强制检查。
-- Worker 模块应保留 `if __name__ == "__main__"` 入口，便于脱离 Orchestrator 展示其输入、输出和 artifact 数据流。
+| 文件 | 职责 |
+| --- | --- |
+| `interfaces/cli/main.py` | 定义 `scan/analyze/annotate/plan/review/report/status`；加载配置、调用应用服务、处理 JSON 和图文件输出。 |
+| `interfaces/cli/render.py` | 使用 Rich 展示扫描、分析、语义、审批、状态和报告。 |
+| `interfaces/__init__.py`、`interfaces/cli/__init__.py` | 包边界。 |
+
+正式入口：
+
+```text
+pyproject console script 或 __main__.py
+→ interfaces.cli.main::main
+→ AnalysisService
+```
+
+### `application`：应用用例门面
+
+| 文件 | 职责 |
+| --- | --- |
+| `application/services.py` | 将 CLI 用例映射到 Orchestrator：`scan`、`analyze`、`annotate`、`plan`、`review`、`report`。 |
+| `application/__init__.py` | 导出 `AnalysisService`。 |
+
+该层不实现算法，只隔离接口层和具体工作流。
+
+### `workers`：确定性处理
+
+| 文件 | 职责 |
+| --- | --- |
+| `workers/base.py` | `BaseWorker` 和只读 `WorkerContext`。 |
+| `workers/scanning.py` | 递归发现 `.m` 文件、排除路径，并提供同步项目扫描。 |
+| `workers/scanner_agent.py` | Worker-1：生成 `file-manifest.json`。 |
+| `workers/parser_protocol.py` | MATLAB 单文件解析器协议。 |
+| `workers/matlab_parser.py` | maxx/Tree-sitter 适配，提取 MATLAB 文件及函数元数据。 |
+| `workers/parser_agent.py` | Worker-2：解析分块并聚合为 `scan-result.json`。 |
+| `workers/dependency_analysis.py` | 使用 NetworkX 构建调用图，以 SCC 计算循环簇及少量代表性环，并分析入口、孤立和未解析调用。算法核心由语义注解阶段根据源码判断。 |
+| `workers/analyzer_agent.py` | Worker-3：读取扫描 artifact，生成 `analysis-result.json`。 |
+| `workers/graph_output.py` | 将分析结果投影为 Rich 依赖树、Graph JSON 和 Mermaid `.mmd`。 |
+| `workers/__init__.py` | 延迟导出 Worker 及确定性能力，避免不必要的导入副作用。 |
+
+确定性预处理调用链：
+
+```text
+ScannerAgent → scanning
+ParserAgent  → matlab_parser
+AnalyzerAgent → dependency_analysis
+CLI analyze → graph_output
+```
+
+输出验证器也复用 `scanning`、`matlab_parser` 和 `dependency_analysis`，确保重构前后使用同一套事实工具。
+
+### `agents`：语义推理
+
+| 文件 | 职责 |
+| --- | --- |
+| `agents/base.py` | `BaseAgent` 与 `AgentContext`；Agent 只能通过 ArtifactStore 读取上下文。 |
+| `agents/planning_context.py` | 从 analysis 和 semantic artifacts 构建规划上下文。 |
+| `agents/module_responsibility.py` | 提出模块职责、边界和依赖。 |
+| `agents/naming_directory.py` | 提出函数新名称和目标目录。 |
+| `agents/repair.py` | 根据失败验证证据提出有限修复操作。 |
+| `agents/natural_language_report.py` | 根据计划、ChangeSet 和验证事实生成 JSON/Markdown 报告。 |
+| `agents/semantic_annotation/context_builder.py` | 按 SCC、依赖关系和 token 预算构建语义工作单元及源码上下文。 |
+| `agents/semantic_annotation/agent.py` | 调用结构化 LLM 生成函数簇注解。 |
+| `agents/semantic_annotation/aggregator.py` | 聚合为函数、文件、项目三级语义，并记录冲突。 |
+
+Agent 输出必须通过 Pydantic 校验。模型不能修改工具产生的路径、哈希或验证状态。
+
+### `orchestration`：跨阶段工作流
+
+| 文件 | 职责 |
+| --- | --- |
+| `orchestration/workflow.py` | LangGraph StateGraph、动态 fan-out/fan-in、条件路由、interrupt、恢复和完整生命周期。 |
+| `orchestration/orchestrator.py` | `LangGraphWorkflow` 的兼容外部类名。 |
+| `orchestration/worker_pool.py` | 按 `WorkerKind` 注册和路由确定性 Worker。 |
+| `orchestration/state_manager.py` | SQLite/WAL Job 与 Task 审计投影，供 `status` 使用。 |
+| `orchestration/quality_gate.py` | 验证 Scanner、Parser、Analyzer 的输出和 artifact 不变量。 |
+| `orchestration/conflict_resolver.py` | 检测并发任务的路径声明冲突。 |
+| `orchestration/plan_reconciler.py` | 合并模块和命名候选，检查名称、路径、覆盖与移动冲突。 |
+| `orchestration/changeset_executor.py` | 复制源树、改写符号、移动文件、记录哈希并原子发布隔离代码库。 |
+| `orchestration/project_validator.py` | 重新扫描输出，验证源/输出完整性、解析、计划符合性和调用图。 |
+| `orchestration/__init__.py` | 导出公共编排组件。 |
+
+### `infrastructure`：外部适配
+
+| 文件 | 职责 |
+| --- | --- |
+| `infrastructure/config.py` | 合并默认值、`.env` 和进程环境变量，并严格校验。 |
+| `infrastructure/artifacts.py` | 在 Job 目录中安全、原子地读写 Pydantic JSON。 |
+| `infrastructure/logging.py` | 初始化日志级别。 |
+| `infrastructure/llm/client.py` | OpenAI-compatible 结构化请求、SDK 重试、响应重试和模型校验。 |
+| `infrastructure/llm/factory.py` | 从配置和环境变量创建真实 LLM 客户端。 |
+
+### `domain`：数据契约
+
+| 文件 | 主要模型 |
+| --- | --- |
+| `domain/models.py` | 文件、函数、扫描和依赖分析结果。 |
+| `domain/orchestration.py` | Job、Task、WorkerResult 和基础 Outcome。 |
+| `domain/agents.py` | AgentRequest、AgentProposal、AgentResult。 |
+| `domain/semantics.py` | 语义工作单元、源码证据、三级 SemanticIndex。 |
+| `domain/planning.py` | 规划上下文、候选、冲突、RefactorPlan 和 ReviewDecision。 |
+| `domain/changes.py` | 实际文件变更和 ChangeSet。 |
+| `domain/validation.py` | ValidationCheck、ValidationResult、RepairProposal。 |
+| `domain/reporting.py` | 报告草稿、最终报告和查询 Outcome。 |
+| `domain/enums.py` | MATLAB 对象、Worker、Agent、Job 和 Task 枚举。 |
+| `domain/exceptions.py` | 配置、解析、LLM、artifact、冲突和执行异常。 |
+
+## LangGraph 主流程
+
+```mermaid
+flowchart TD
+    S[discover] --> P[parse_chunk × N]
+    P --> A[aggregate_parse]
+    A --> D[analyze]
+    D --> U[build_semantic_units]
+    U --> N[annotate_unit × N]
+    N --> G[aggregate_semantics]
+    G --> M[module_responsibility]
+    G --> ND[naming_directory]
+    M --> C[collect_planning_candidates]
+    ND --> C
+    C --> R[reconcile_plan]
+    R --> H{human_review}
+    H -->|approve| E[execute_changeset]
+    H -->|reject/request changes| F[finish]
+    E --> V{validate_output}
+    V -->|passed or no retry| REP[generate_report]
+    V -->|failed and retry allowed| PR[propose_repair]
+    PR --> RR{repair_review}
+    RR -->|approve| E
+    RR -->|reject/request changes| F
+    REP --> F
+```
+
+`scan`、`analyze` 和 `annotate` 使用同一张图，但会在对应阶段提前进入 `finish`。`plan` 才会继续进入人工审批、执行和验证。
+
+## 输入项目到输出代码库
+
+### 1. 发现与解析
+
+```text
+输入目录
+→ MatlabFileDiscovery
+→ file-manifest.json
+→ 按 parser_chunk_size 分块
+→ parse-chunk-xxxxx.json
+→ scan-result.json
+```
+
+manifest 固定本次 Job 的文件集合。聚合阶段会拒绝缺失、重复或 manifest 外文件。
+
+### 2. 依赖与语义
+
+```text
+scan-result.json
+→ DependencyAnalyzer
+→ analysis-result.json
+→ SCC/依赖聚类和受控源码上下文
+→ LLM 语义注解
+→ semantic-index.json
+```
+
+### 3. 规划与审批
+
+```text
+analysis + semantic index
+→ ModuleResponsibilityAgent || NamingDirectoryAgent
+→ planning candidates
+→ PlanReconciler
+→ refactor-plan.json
+→ LangGraph interrupt 等待审批
+```
+
+Agent 提出候选，`PlanReconciler` 确定性检查 MATLAB 标识符、覆盖完整性、目标路径冲突和移动循环。
+
+### 4. 隔离执行
+
+`ChangeSetExecutor` 的顺序是：
+
+1. 校验输入与输出不嵌套。
+2. 计算输入目录树哈希。
+3. 把输入项目复制到输出根目录下的临时 staging。
+4. 在 staging 内改写 MATLAB 标识符和调用引用。
+5. 通过分阶段移动完成文件重命名和目录调整。
+6. 再次计算输入目录树哈希；变化则终止。
+7. 计算输出树哈希，写入 `.matlab-refactor-changeset.json`。
+8. 通过目录原子替换发布 `<output_dir>/<job_id>/`。
+
+输入目录从不作为写入目标。
+
+### 5. 验证、修复和报告
+
+输出代码库会被重新扫描和分析。当前检查包括：
+
+- `source_integrity`：输入目录树没有变化；
+- `output_integrity`：输出与 ChangeSet 哈希一致；
+- `matlab_parse`：输出 MATLAB 文件可完整解析；
+- `plan_conformance`：目标路径和符号映射已实现；
+- `dependency_graph`：关键调用图不变量保持一致；
+- `matlab_runtime`：MATLAB Engine 可用性及未来运行时检查入口。
+
+失败且未超过重试上限时，RepairAgent 生成新计划并再次等待审批。批准后生成 `<job_id>-repair-<N>/`，不会覆盖旧输出。最终报告严格以工具事实为准。
+
+## 运行数据布局
+
+```text
+var/
+├── jobs/<job-id>/                阶段 artifacts
+├── refactor-agent.db             Job/Task 状态
+├── langgraph-checkpoints.db      图 checkpoint 和 interrupt
+├── graphs/                       Graph JSON 和 Mermaid
+├── refactored-projects/          隔离输出代码库
+└── reports/<job-id>/             JSON/Markdown 报告
+```
+
+`var/` 是运行状态，不属于源码结构，默认被 Git 忽略。
+
+## 测试结构
+
+```text
+tests/
+├── fixtures/                     MATLAB 示例项目与测试配置
+├── unit/                         解析、图、Agent、配置和编排组件测试
+└── integration/                  CLI、Orchestrator 和完整语义/审批闭环
+```
+
+运行全部测试：
+
+```powershell
+python -m pytest
+```

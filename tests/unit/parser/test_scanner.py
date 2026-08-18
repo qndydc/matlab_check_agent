@@ -6,7 +6,7 @@ Referenced By: pytest 测试发现。
 
 from pathlib import Path
 
-from matlab_refactor_agent.capabilities.parser.matlab_scanner import MatlabProjectScanner
+from matlab_refactor_agent.workers.scanning import MatlabProjectScanner
 from matlab_refactor_agent.domain.enums import MatlabObjectKind
 from matlab_refactor_agent.domain.models import MatlabFileInfo
 

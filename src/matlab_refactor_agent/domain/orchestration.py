@@ -23,9 +23,13 @@ def utc_now() -> datetime:
 
 
 class TaskEnvelope(DomainModel):
-    """作用：定义跨 Worker 的轻量任务信封；输入：Worker 类型、payload 和依赖；输出：可持久化任务；数据流：Orchestrator -> TaskQueue -> WorkerPool。"""
+    #DomainModel是自定义基类，几乎确定继承自 Pydantic 的 BaseModel（或 RootModel）。
+    #BaseModel 的元类是 ModelMetaclass，重写了 __new__ 来收集字段定义，构建验证逻辑。
+    """作用：定义确定性 Worker 的轻量任务信封；输入：Worker 类型、payload 和依赖；输出：审计任务；数据流：LangGraph 节点 -> WorkerPool。"""
 
-    task_id: str = Field(default_factory=lambda: uuid4().hex)
+    task_id: str = Field(default_factory=lambda: uuid4().hex) #Field()为 Pydantic 字段配置函数：返回 FieldInfo 对象，
+                                                              #包含字段元数据（默认值、校验规则、描述等）。
+                                                              #Pydantic 元类在扫描时识别这些 FieldInfo 对象。
     job_id: str
     worker_kind: WorkerKind
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -41,7 +45,7 @@ class WorkerResult(DomainModel):
 
     task_id: str
     success: bool
-    artifacts: dict[str, str] = Field(default_factory=dict)
+    artifacts: dict[str, str] = Field(default_factory=dict) #文件清单的保存位置
     metrics: dict[str, int | float | str | bool] = Field(default_factory=dict)
     diagnostics: list[str] = Field(default_factory=list)
 

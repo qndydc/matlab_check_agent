@@ -1,5 +1,5 @@
 """
-Description: 通过延迟导入汇总七类 Worker、BaseWorker 和 WorkerContext。
+Description: 通过延迟导入汇总三个确定性前处理 Worker、BaseWorker 和 WorkerContext。
 References: importlib、workers 各 Agent 模块。
 Referenced By: Orchestrator 工厂和外部 Worker 扩展。
 """
@@ -12,35 +12,48 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .analyzer_agent import AnalyzerAgent
     from .base import BaseWorker, WorkerContext
+    from .dependency_analysis import DependencyAnalyzer
+    from .graph_output import (
+        build_graph_document,
+        render_dependency_tree,
+        write_graph_json,
+        write_mermaid,
+    )
+    from .matlab_parser import MaxxMatlabParser
     from .parser_agent import ParserAgent
-    from .executor_agent import ExecutorAgent
-    from .planner_agent import PlannerAgent
-    from .reporter_agent import ReporterAgent
+    from .scanning import MatlabFileDiscovery, MatlabProjectScanner
     from .scanner_agent import ScannerAgent
-    from .validator_agent import ValidatorAgent
 
 _EXPORT_MODULES = {
     "AnalyzerAgent": ".analyzer_agent",
     "BaseWorker": ".base",
-    "ExecutorAgent": ".executor_agent",
+    "DependencyAnalyzer": ".dependency_analysis",
+    "MatlabFileDiscovery": ".scanning",
+    "MatlabProjectScanner": ".scanning",
+    "MaxxMatlabParser": ".matlab_parser",
     "ParserAgent": ".parser_agent",
-    "PlannerAgent": ".planner_agent",
-    "ReporterAgent": ".reporter_agent",
     "ScannerAgent": ".scanner_agent",
-    "ValidatorAgent": ".validator_agent",
     "WorkerContext": ".base",
+    "build_graph_document": ".graph_output",
+    "render_dependency_tree": ".graph_output",
+    "write_graph_json": ".graph_output",
+    "write_mermaid": ".graph_output",
 }
 
 __all__ = [
     "AnalyzerAgent",
     "BaseWorker",
-    "ExecutorAgent",
+    "DependencyAnalyzer",
+    "MatlabFileDiscovery",
+    "MatlabProjectScanner",
+    "MaxxMatlabParser",
     "ParserAgent",
-    "PlannerAgent",
-    "ReporterAgent",
     "ScannerAgent",
-    "ValidatorAgent",
     "WorkerContext",
+    "build_graph_document",
+    "render_dependency_tree",
+    "write_graph_json",
+    "write_mermaid",
 ]
 
 

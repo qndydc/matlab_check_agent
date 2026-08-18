@@ -1,77 +1,145 @@
 # MATLAB Refactor Agent
 
-MATLAB Refactor Agent 用于扫描大型 MATLAB 代码库、提取函数元数据并分析调用关系。当前版本采用 Orchestrator–Worker 架构完成阶段一 CLI，不会修改被分析项目。
+## Web MVP
 
-## 当前能力
+项目包含一个本机单用户 Web MVP，可生成可交互的函数调用图，并按需展示函数、文件和项目三级语义注释。
 
-- 递归扫描 `.m` 文件，并支持配置排除目录/路径。
-- 使用 `maxx`（Tree-sitter）识别 MATLAB 文件类型和验证解析结果。
-- 提取函数名、包限定名、输入、输出、源码行号和调用名称。
-- 将脚本纳入调用图，支持 `+package` 函数解析。
-- 构建有向调用图，检测循环依赖、孤立对象、入口点和核心函数。
-- 将无法唯一解析的调用单独报告，避免错误建立依赖边。
-- 支持 Rich 终端函数调用树，标记循环、共享依赖和未解析调用。
-- 支持版本化 Graph JSON，为后续 React/vis-network 交互图提供稳定节点/边契约。
-- 支持 Mermaid 调用图导出，便于在文档和代码托管平台直接预览。
-- 通过 TaskQueue、WorkerPool、SQLite 状态和 artifact 引用运行扫描分析流水线。
-- Worker-1 生成稳定文件清单，Worker-2 并发解析文件分片并聚合，Worker-3 分析依赖图。
-- Worker 间不传递整个代码库，只传递 Job/Task 元数据和 artifact 路径。
+```powershell
+python -m pip install -e ".[dev]"
+Set-Location frontend
+pnpm install
+Set-Location ..
+python scripts/start_mvp.py
+```
 
-本版本只执行只读分析，尚不包含 LLM 规划、文件重构、MATLAB Engine 验证或 Web UI。
+浏览器访问 `http://127.0.0.1:5173`。前端会连接本机 `8000` 端口的 API；普通结构图不调用 LLM，只有点击“生成三级注释”后才会使用 LLM 配置。
+
+Web 项目的调用图和三级注释会长期保存到 `var/web-projects.db`。前端“历史项目”面板可以恢复或删除这些本地快照；可通过 `MATLAB_REFACTOR_WEB_DB` 修改数据库路径。
+
+MATLAB Refactor Agent 是一个面向 MATLAB 代码库的 CLI 重构工具。它能够扫描和解析 `.m` 文件、构建调用图、生成语义与重构计划，并在人工批准后把变更应用到隔离的输出目录。输入项目始终只读。
+
+当前版本提供完整 CLI 流程：
+
+```text
+扫描 → 分块解析 → 依赖分析 → 语义注解 → 重构规划
+    → 人工审批 → 隔离执行 → 静态验证 → 修复复审 → 报告
+```
+
+内部结构见 [structure.md](structure.md)，开发进度与后续路线见 [项目规划.md](项目规划.md)。
+
+## 功能
+
+- 递归发现 MATLAB 文件，并支持排除目录和通配规则。
+- 使用 maxx/Tree-sitter 提取函数、脚本、package、局部函数、输入输出、行号和调用名称。
+- 分块并行解析大型代码库，输出稳定的 Pydantic/JSON 数据。
+- 构建有向调用图，以强连通分量（SCC）识别循环簇，并输出少量代表性环、孤立对象、入口点和未解析调用。
+- 由 AI 根据函数源码与邻居上下文识别承担项目重要算法的核心函数；不再按调用次数判断。
+- 在终端显示依赖树，并导出 Graph JSON 和 Mermaid `.mmd`。
+- 通过 OpenAI-compatible LLM 生成函数、文件和项目三级语义索引。
+- 并行生成模块职责与命名目录建议，再由确定性代码合并为重构计划。
+- 通过 LangGraph checkpoint 暂停并等待人工批准。
+- 在独立目录复制、改写和移动文件，绝不直接写入输入项目。
+- 验证源项目完整性、输出完整性、解析结果、计划符合性和依赖图回归。
+- 验证失败时生成有限修复建议，经人工复审后输出新版本。
+- 生成结构化 JSON 和 Markdown 交付报告。
 
 ## 环境要求
 
-- Python 3.10 及以上
+- Python 3.10 或更高版本
 - Windows、Linux 或 macOS
-- 分析阶段不要求安装 MATLAB
+- 扫描和静态分析不要求安装 MATLAB
+- `annotate`、`plan` 和报告生成需要可用的 OpenAI-compatible LLM API
 
-`maxx` 当前采用 GPL-3.0 许可证。若后续分发本项目，请先确认整体许可策略。
+> `maxx` 当前采用 GPL-3.0 许可证。分发本项目之前，请确认整体许可证策略。
 
-## 安装
-
-建议在虚拟环境中安装：
+## 使用 Conda 安装
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+git clone <repository-url>
+cd matlab_check_agent
+conda create -n matlab-refactor python=3.11 -y
+conda activate matlab-refactor
 python -m pip install -e ".[dev]"
 ```
 
+之后每次使用前激活环境：
+
+```powershell
+conda activate matlab-refactor
+```
+
+安装完成后可以使用：
+
+```powershell
+matlab-refactor --help
+matlab-refactor --version
+```
+
+也可以通过 Python 模块运行：
+
+```powershell
+python -m matlab_refactor_agent --help
+```
+
+## 配置
+
+推荐复制环境变量模板：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后至少设置输入目录和 LLM Key：
+
+```dotenv
+MATLAB_REFACTOR_INPUT_PATH=D:/projects/my-matlab-project
+MATLAB_REFACTOR_CODE_OUTPUT_DIR=D:/outputs/refactored-projects
+DEEPSEEK_API_KEY=your-api-key
+```
+
+`.env` 已被 Git 忽略，不要提交真实密钥。完整变量及说明见 [.env.example](.env.example)。项目不再读取 YAML 配置。
+
+配置优先级为：
+
+```text
+进程环境变量 > .env > 代码默认值
+```
+
+相对路径以执行命令时的当前目录为基准。输入项目、重构输出、报告输出和图输出不能互相嵌套；尤其不能把输出目录放在输入项目内部。
+
+主要输出目录默认值：
+
+| 内容 | 默认目录 |
+| --- | --- |
+| 隔离重构代码库 | `var/refactored-projects` |
+| 最终报告 | `var/reports` |
+| Graph JSON / Mermaid | `var/graphs` |
+| 阶段 artifact | `var/jobs` |
+| Job 审计数据库 | `var/refactor-agent.db` |
+| LangGraph checkpoint | `var/langgraph-checkpoints.db` |
+
 ## 快速开始
 
-扫描项目：
+### 1. 扫描 MATLAB 项目
 
 ```powershell
 matlab-refactor scan D:\path\to\matlab-project
+matlab-refactor scan D:\path\to\matlab-project --json scan.json
 ```
 
-分析依赖：
+省略项目路径时使用 `.env` 中的 `MATLAB_REFACTOR_INPUT_PATH`：
+
+```powershell
+matlab-refactor scan
+```
+
+### 2. 分析调用关系
 
 ```powershell
 matlab-refactor analyze D:\path\to\matlab-project
 ```
 
-命令完成后会输出 Job ID。查询 Orchestrator 和 Worker 状态：
-
-```powershell
-matlab-refactor status <job-id>
-```
-
-在终端显示函数调用/依赖树：
-
-```powershell
-matlab-refactor analyze D:\path\to\matlab-project --tree
-```
-
-导出 Web-ready 图数据和 Mermaid 图：
-
-```powershell
-matlab-refactor analyze D:\path\to\matlab-project `
-  --graph-json dependency-graph.json `
-  --mermaid dependency-graph.mmd
-```
-
-三个可视化选项可以组合使用：
+显示终端依赖树并导出图：
 
 ```powershell
 matlab-refactor analyze D:\path\to\matlab-project `
@@ -80,127 +148,95 @@ matlab-refactor analyze D:\path\to\matlab-project `
   --mermaid dependency-graph.mmd
 ```
 
-将分析结果写入 JSON：
+如果 `auto_export_graphs` 为 `true`，未显式指定文件时也会自动写入配置的图目录。
+
+### 3. 生成语义索引
 
 ```powershell
-matlab-refactor analyze D:\path\to\matlab-project --json analysis.json
+matlab-refactor annotate D:\path\to\matlab-project
+matlab-refactor annotate D:\path\to\matlab-project --json semantic-index.json
 ```
 
-输出 JSON 到标准输出，便于 CI 使用：
+此命令会调用 LLM，生成函数、文件、项目三级语义，以及模块职责和命名目录候选。
+
+### 4. 生成并审批重构计划
 
 ```powershell
-matlab-refactor analyze D:\path\to\matlab-project --json
+matlab-refactor plan D:\path\to\matlab-project
 ```
 
-也可以直接运行 Python 模块：
+`plan` 会输出 Job ID，并在人工审批节点暂停。查看计划：
 
 ```powershell
-python -m matlab_refactor_agent analyze D:\path\to\matlab-project
+matlab-refactor review <JOB_ID>
 ```
 
-### 独立运行 Worker
-
-每个 Worker 模块都提供 `if __name__ == "__main__"` 演示入口：
+批准执行：
 
 ```powershell
-# Worker-1：发现文件并输出 file-manifest 引用
-python -m matlab_refactor_agent.workers.scanner_agent D:\path\to\matlab-project
-
-# Worker-2：按两个文件一片执行解析和聚合
-python -m matlab_refactor_agent.workers.parser_agent D:\path\to\matlab-project --chunk-size 2
-
-# Worker-3：读取 Worker-2 输出的 scan-result.json
-python -m matlab_refactor_agent.workers.analyzer_agent D:\path\to\scan-result.json
-
-# Worker-4～7：展示尚未实现时的标准安全响应
-python -m matlab_refactor_agent.workers.planner_agent
-python -m matlab_refactor_agent.workers.executor_agent
-python -m matlab_refactor_agent.workers.validator_agent
-python -m matlab_refactor_agent.workers.reporter_agent
+matlab-refactor review <JOB_ID> --decision approve --comment "确认执行"
 ```
 
-可通过 `--artifact-dir` 指定演示产物目录；默认写入 `var/worker-demos/`。
-
-## 配置
-
-复制 `config.example.yaml` 并按需修改：
-
-```yaml
-project:
-  exclude_patterns: [".git", "slprj", "build"]
-  entry_points: []
-
-logging:
-  level: INFO
-  format: console
-
-orchestrator:
-  state_db: var/refactor-agent.db
-  artifact_dir: var/jobs
-  max_workers: 4
-  parser_chunk_size: 100
-```
-
-`parser_chunk_size` 控制每个 Worker-2 解析任务包含的 MATLAB 文件数；独立分片最多按 `max_workers` 并发执行。
-
-通过全局参数加载配置：
+也可以拒绝或要求修改：
 
 ```powershell
-matlab-refactor --config config.yaml analyze D:\path\to\matlab-project
+matlab-refactor review <JOB_ID> --decision reject --comment "不采用该方案"
+matlab-refactor review <JOB_ID> --decision request_changes --comment "请调整目录方案"
 ```
 
-`entry_points` 留空时，默认将调用图中没有入边的对象视为候选入口。手动配置后，仅报告能够在项目内唯一解析的指定入口。
+批准后，新代码库写入：
 
-## 输出语义
+```text
+<output_dir>/<JOB_ID>/
+```
 
-- `functions`：函数和作为入口节点的脚本。
-- `dependencies`：完成作用域消歧后的项目内部有向调用边。
-- `cycles`：项目内部已解析调用边形成的循环。
-- `orphans`：没有项目内部入边或出边的对象；调用 MATLAB 内置函数不会让它脱离孤立状态。
-- `core_functions`：对项目内部调用图计算 PageRank 后排名前 20% 的非孤立对象。
-- `entry_points`：手工配置的入口，或自动检测出的零入度对象。
-- `unresolved_calls`：MATLAB 内置函数、第三方函数、动态调用或无法唯一消歧的调用。
+验证失败并批准修复后，新版本写入：
 
-当前调用提取覆盖常见的 `name(...)` 和 `package.name(...)` 形式。命令式调用、`feval`、动态函数句柄、复杂类方法分派将在后续版本增强。
+```text
+<output_dir>/<JOB_ID>-repair-<N>/
+```
 
-### Graph JSON 契约
+已有输出不会被覆盖。
 
-`--graph-json` 输出面向后续 Web API 和图组件的数据，不等同于包含全部分析细节的 `--json`：
+### 5. 查看状态和报告
 
-- `schema_version`：当前为 `1.0`，用于前端兼容判断。
-- `nodes`：稳定 ID、显示标签、文件位置、类型，以及入口/核心/孤立标记。
-- `edges`：稳定边 ID、`source`、`target` 和循环边标记。
-- `entry_points`、`cycles`、`unresolved_calls`：图交互需要的辅助信息。
+```powershell
+matlab-refactor status <JOB_ID>
+matlab-refactor report <JOB_ID>
+matlab-refactor report <JOB_ID> --json final-report.json
+```
 
-后续 vis-network 前端只需将 `source/target` 映射为 `from/to`，不需要重新解析 MATLAB 调用名称。
+## 命令概览
+
+| 命令 | 用途 | 是否调用 LLM |
+| --- | --- | --- |
+| `scan` | 文件发现与 MATLAB 元数据提取 | 否 |
+| `analyze` | 调用图、SCC 循环簇、代表性环、入口和孤立对象分析 | 否 |
+| `annotate` | 三级语义与规划候选生成 | 是 |
+| `plan` | 生成重构计划并等待审批 | 是 |
+| `review` | 查看或提交人工决定 | 视后续流程而定 |
+| `report` | 查询最终交付报告 | 否 |
+| `status` | 查询 Job 与 Worker 状态 | 否 |
+
+所有支持 `--json [FILE]` 的命令，在省略 `FILE` 时将 JSON 写入标准输出，适合 CI 使用。
+
+## 安全边界
+
+- 输入 MATLAB 项目始终只读。
+- 执行前后都会计算源目录树哈希。
+- 修改仅发生在隔离 staging 副本中。
+- 输出完整后通过原子目录替换发布。
+- 符号链接和目录 junction 会被拒绝。
+- LLM 只返回结构化语义或建议，不能直接写文件。
+- 真正的改名、引用改写、移动和验证由确定性代码执行。
+
+当前验证以静态检查为主。未安装 MATLAB Engine 时，运行时、数值和性能验证会标记为 `unavailable`，不会伪装成通过。
 
 ## 开发与测试
-
-所有新增函数和类必须包含简洁注释头，至少描述以下内容：
-
-- 作用：该定义负责什么。
-- 输入：参数或构造数据。
-- 输出：返回值、生成对象或副作用。
-- 数据流：数据从哪里进入、经过什么处理、流向哪里。
-
-所有 `.py` 文件还必须在文件首部包含标准模块文档头，并置于
-`from __future__` 之前：
-
-```python
-"""
-Description: 当前模块负责什么。
-References: 当前模块直接引用的内部模块或关键外部库。
-Referenced By: 主要引用当前模块的模块、入口或测试。
-"""
-```
-
-没有直接引用时应明确写“无”，不能省略字段。新增、移动模块后需要同步更新
-`References` 和 `Referenced By`。
 
 ```powershell
 python -m pytest
 python -m pytest --cov=matlab_refactor_agent --cov-report=term-missing
 ```
 
-项目结构和后续阶段参见 [项目文件规划.md](项目文件规划.md)。架构目标参见 [设计文档.md](设计文档.md)。
-多 Worker 的职责、状态流和大代码库分片原则参见 [Orchestrator–Worker 架构](docs/orchestrator-worker.md)。
+当前测试覆盖扫描、解析、图分析、CLI、LangGraph 编排、语义聚合、计划仲裁、隔离执行、验证和报告流程。

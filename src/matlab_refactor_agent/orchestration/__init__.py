@@ -8,14 +8,15 @@ from .conflict_resolver import ConflictResolver
 from .orchestrator import Orchestrator
 from .quality_gate import QualityGate
 from .state_manager import SQLiteStateManager
-from .task_queue import TaskQueue
 from .worker_pool import WorkerPool
+from .workflow import LangGraphWorkflow, WorkflowState
 
 __all__ = [
     "ConflictResolver",
     "Orchestrator",
     "QualityGate",
     "SQLiteStateManager",
-    "TaskQueue",
     "WorkerPool",
+    "LangGraphWorkflow",
+    "WorkflowState",
 ]

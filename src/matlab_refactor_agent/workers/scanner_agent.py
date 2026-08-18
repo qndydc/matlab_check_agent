@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Sequence
 from uuid import uuid4
 
-from matlab_refactor_agent.capabilities.parser import MatlabFileDiscovery
+from matlab_refactor_agent.workers.scanning import MatlabFileDiscovery
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
@@ -45,7 +45,7 @@ class ScannerAgent(BaseWorker):
         return WorkerResult(
             task_id=task.task_id,
             success=True,
-            artifacts={"file_manifest": reference},
+            artifacts={"file_manifest": reference}, #文件清单的保存位置
             metrics={
                 "file_count": result.file_count,
                 "excluded_count": result.excluded_count,

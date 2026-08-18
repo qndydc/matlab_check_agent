@@ -4,7 +4,7 @@ References: DependencyAnalyzer、domain.models。
 Referenced By: pytest 测试发现。
 """
 
-from matlab_refactor_agent.capabilities.analyzer import DependencyAnalyzer
+from matlab_refactor_agent.workers.dependency_analysis import DependencyAnalyzer
 from matlab_refactor_agent.domain.models import FunctionInfo, MatlabFileInfo, ScanResult
 
 
@@ -36,7 +36,9 @@ def test_analyzer_finds_cycles_orphans_and_callers() -> None:
 
     result = DependencyAnalyzer().analyze(scan)
 
+    assert result.cycle_clusters == [["cycleA", "cycleB"]]
     assert result.cycles == [["cycleA", "cycleB"]]
+    assert result.core_functions == []
     assert result.orphans == ["orphan"]
     assert result.entry_points == ["entry", "orphan"]
     worker = next(item for item in result.functions if item.name == "worker")
@@ -95,3 +97,21 @@ def test_local_call_resolves_within_callers_file() -> None:
     )
     assert resolved_local.called_by == ["primary"]
     assert "primary" not in result.unresolved_calls
+
+
+def test_scc_cycle_clusters_limit_representative_cycles() -> None:
+    functions = [
+        _function("a", ["b", "c", "d"]),
+        _function("b", ["a", "c", "d"]),
+        _function("c", ["a", "b", "d"]),
+        _function("d", ["a", "b", "c"]),
+    ]
+    scan = ScanResult(
+        project_root="/project",
+        files=[MatlabFileInfo(path="dense.m", functions=functions)],
+    )
+
+    result = DependencyAnalyzer().analyze(scan)
+
+    assert result.cycle_clusters == [["a", "b", "c", "d"]]
+    assert 1 <= len(result.cycles) <= 3

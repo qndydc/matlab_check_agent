@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  Description: MATLAB Atlas 的单页应用 HTML 外壳。
+  作用: 提供页面元信息、React 挂载节点和前端模块入口。
+  优点: 内容极少，实际界面完全由 React 管理，便于组件化开发。
+  调用/被调用: 由 Vite 开发服务器或生产静态服务器返回；加载 src/main.tsx。
+  基础知识: type="module" 允许浏览器使用 ES Module；#root 是 React 接管页面的容器。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f1e8" />
+    <title>MATLAB Atlas</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

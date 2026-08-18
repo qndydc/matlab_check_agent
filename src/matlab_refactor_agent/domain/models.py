@@ -97,6 +97,7 @@ class AnalysisResult(DomainModel):
     project_root: str
     functions: list[FunctionInfo] = Field(default_factory=list)
     dependencies: list[DependencyEdge] = Field(default_factory=list)
+    cycle_clusters: list[list[str]] = Field(default_factory=list)
     cycles: list[list[str]] = Field(default_factory=list)
     orphans: list[str] = Field(default_factory=list)
     core_functions: list[str] = Field(default_factory=list)

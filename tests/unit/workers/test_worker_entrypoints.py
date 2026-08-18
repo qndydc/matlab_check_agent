@@ -1,6 +1,6 @@
 """
-Description: 验证七类 Worker 的独立 main 演示入口及结构化输出。
-References: workers 各 Agent main、pytest、MATLAB fixture。
+Description: 验证三个确定性前处理 Worker 的独立 main 演示入口及结构化输出。
+References: Scanner/Parser/Analyzer main、pytest、MATLAB fixture。
 Referenced By: pytest 测试发现。
 """
 
@@ -12,12 +12,8 @@ from pathlib import Path
 import pytest
 
 from matlab_refactor_agent.workers.analyzer_agent import main as analyzer_main
-from matlab_refactor_agent.workers.executor_agent import main as executor_main
 from matlab_refactor_agent.workers.parser_agent import main as parser_main
-from matlab_refactor_agent.workers.planner_agent import main as planner_main
-from matlab_refactor_agent.workers.reporter_agent import main as reporter_main
 from matlab_refactor_agent.workers.scanner_agent import main as scanner_main
-from matlab_refactor_agent.workers.validator_agent import main as validator_main
 
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "matlab_projects" / "basic"
@@ -60,19 +56,3 @@ def test_parser_and_analyzer_worker_mains(
     assert parser_result["metrics"]["chunk_count"] == 4
     assert analyzer_exit == 0
     assert analyzer_result["metrics"]["node_count"] == 8
-
-
-@pytest.mark.parametrize(
-    "worker_main",
-    [planner_main, executor_main, validator_main, reporter_main],
-)
-def test_reserved_worker_mains(
-    worker_main: object, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """作用：验证 Worker-4～7 演示入口；输入：预留 Worker 名称；输出：安全失败诊断断言；数据流：main -> ReservedAgent -> JSON stdout。"""
-
-    exit_code = worker_main(["--artifact-dir", str(tmp_path)])  # type: ignore[operator]
-    result = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert result["success"] is False
-    assert result["diagnostics"]

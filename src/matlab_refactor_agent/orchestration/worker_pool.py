@@ -6,8 +6,6 @@ Referenced By: Orchestrator 和后续并发调度实现。
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from matlab_refactor_agent.domain.exceptions import WorkerNotFoundError
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.workers.base import BaseWorker, WorkerContext
@@ -34,24 +32,6 @@ class WorkerPool:
         if worker is None:
             raise WorkerNotFoundError(f"未注册 Worker: {task.worker_kind}")
         return worker.execute(task, context)
-
-    def execute_many(
-        self, tasks: list[TaskEnvelope], context: WorkerContext
-    ) -> dict[str, WorkerResult | Exception]:
-        """作用：按池容量并发执行独立任务；输入：任务列表和上下文；输出：Task ID 到结果/异常映射；数据流：fan-out -> ThreadPoolExecutor -> fan-in。"""
-
-        outcomes: dict[str, WorkerResult | Exception] = {}
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_tasks = {
-                executor.submit(self.execute, task, context): task for task in tasks
-            }
-            for future in as_completed(future_tasks):
-                task = future_tasks[future]
-                try:
-                    outcomes[task.task_id] = future.result()
-                except Exception as exc:  # Worker 异常必须返回 Orchestrator 统一落状态
-                    outcomes[task.task_id] = exc
-        return outcomes
 
     def registered_kinds(self) -> list[str]:
         """作用：列出可用 Worker；输入：注册表；输出：排序类型列表；数据流：注册表 keys -> 状态/诊断。"""

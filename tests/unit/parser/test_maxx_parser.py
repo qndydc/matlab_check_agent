@@ -6,35 +6,20 @@ Referenced By: pytest 测试发现。
 
 from pathlib import Path
 
-from matlab_refactor_agent.capabilities.parser.maxx_parser import MaxxMatlabParser
-
-
-class _ParsedObject:
-    """作用：模拟 maxx 结果；输入：无；输出：函数类型对象；数据流：测试解析器 -> 类型检测。"""
-
-    kind = "function"
-
-
-class _FileParser:
-    """作用：模拟 maxx FileParser；输入：文件路径；输出：模拟解析对象；数据流：路径 -> parse -> _ParsedObject。"""
-
-    def __init__(self, path: Path) -> None:
-        """作用：保存测试路径；输入：Path；输出：实例；数据流：测试装配 -> 解析调用。"""
-
-        self.path = path
-
-    def parse(self) -> _ParsedObject:
-        """作用：返回固定解析结果；输入：实例路径状态；输出：_ParsedObject；数据流：适配器调用 -> 类型对象。"""
-
-        return _ParsedObject()
+from matlab_refactor_agent.workers.matlab_parser import MaxxMatlabParser
 
 
 def _parser_without_dependency() -> MaxxMatlabParser:
-    """作用：构造无外部依赖解析器；输入：无；输出：MaxxMatlabParser；数据流：测试替身 -> 解析器适配层。"""
+    """构造真实 Tree-sitter 解析器，测试 AST 提取而非正则路径。"""
 
-    parser = MaxxMatlabParser.__new__(MaxxMatlabParser)
-    parser._file_parser = _FileParser
-    return parser
+    return MaxxMatlabParser()
+
+
+class _FailingTreeParser:
+    """强制 AST 失败，用于验证正则仅作为降级方案。"""
+
+    def parse(self, source: bytes):
+        raise SyntaxError("forced failure")
 
 
 def test_extracts_signature_local_function_and_calls(tmp_path: Path) -> None:
@@ -114,3 +99,16 @@ def test_scopes_class_methods_to_class(tmp_path: Path) -> None:
         "Counter.Counter",
         "Counter.current",
     ]
+
+
+def test_regex_is_used_only_after_ast_failure(tmp_path: Path) -> None:
+    path = tmp_path / "fallback.m"
+    path.write_text("function y = fallback(x)\ny = helper(x);\nend\n", encoding="utf-8")
+    parser = MaxxMatlabParser.__new__(MaxxMatlabParser)
+    parser._tree_parser = _FailingTreeParser()
+
+    result = parser.parse_file(path, tmp_path)
+
+    assert str(result.parse_status) == "partial"
+    assert result.functions[0].name == "fallback"
+    assert "正则降级" in result.diagnostics[0]

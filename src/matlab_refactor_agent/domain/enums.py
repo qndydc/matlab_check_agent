@@ -30,10 +30,17 @@ class WorkerKind(StrEnum):
     SCANNER = "scanner"
     PARSER = "parser"
     ANALYZER = "analyzer"
-    PLANNER = "planner"
-    EXECUTOR = "executor"
-    VALIDATOR = "validator"
-    REPORTER = "reporter"
+
+
+class AgentKind(StrEnum):
+    """作用：标识语义理解后的专责 Agent；输入：Agent 阶段；输出：稳定 LangGraph 节点角色。"""
+
+    SEMANTIC_ANNOTATION = "semantic_annotation"
+    MODULE_RESPONSIBILITY = "module_responsibility"
+    NAMING_DIRECTORY = "naming_directory"
+    VALIDATION = "validation"
+    REPAIR = "repair"
+    REPORT = "report"
 
 
 class JobStatus(StrEnum):
@@ -44,10 +51,13 @@ class JobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     WAITING_APPROVAL = "waiting_approval"
+    REJECTED = "rejected"
+    CHANGES_REQUESTED = "changes_requested"
+    VALIDATION_FAILED = "validation_failed"
 
 
 class TaskStatus(StrEnum):
-    """作用：标识单任务生命周期；输入：Worker 执行事件；输出：任务状态；数据流：TaskQueue/WorkerPool -> StateManager。"""
+    """作用：标识单任务生命周期；输入：LangGraph 节点内 Worker 执行事件；输出：任务状态。"""
 
     PENDING = "pending"
     RUNNING = "running"
