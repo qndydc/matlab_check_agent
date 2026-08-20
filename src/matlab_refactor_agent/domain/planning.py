@@ -81,6 +81,14 @@ class NamingDirectoryResponse(DomainModel):
     assumptions: list[str] = Field(default_factory=list)
 
 
+class NamingDirectoryDraft(DomainModel):
+    """作用：约束命名 Agent 只提出实际变更；输入：规划上下文；输出：无需复述完整 symbol 清单的草稿。"""
+
+    changes: list[NamingChange] = Field(default_factory=list)
+    directory_rules: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+
+
 class RefactorPlanningCandidates(DomainModel):
     """作用：汇合两个并行 Agent 的原始候选；输入：两份响应；输出：PlanReconciler 唯一输入。"""
 

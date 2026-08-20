@@ -4,6 +4,8 @@ References: ArtifactStore、domain.models、domain.exceptions.QualityGateError�
 Referenced By: Orchestrator 和质量测试。
 """
 
+from collections import Counter
+
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.exceptions import QualityGateError
 from matlab_refactor_agent.domain.models import (
@@ -11,6 +13,10 @@ from matlab_refactor_agent.domain.models import (
     MatlabFileManifest,
     ParseChunkResult,
     ScanResult,
+)
+from matlab_refactor_agent.domain.semantics import (
+    SemanticClusterContext,
+    SemanticWorkUnits,
 )
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
@@ -105,3 +111,72 @@ class QualityGate:
                 raise QualityGateError(f"循环簇引用未知节点: {sorted(unknown)}")
             if len(cluster) < 2:
                 raise QualityGateError("循环簇必须至少包含两个节点")
+
+    def validate_semantic_preflight(
+        self,
+        scan: ScanResult,
+        analysis: AnalysisResult,
+        work_units: SemanticWorkUnits,
+        contexts: list[SemanticClusterContext],
+    ) -> None:
+        """作用：在任何 LLM 调用前统一校验解析完整性、分簇覆盖和最终上下文预算。"""
+
+        errors: list[str] = []
+        if scan.project_root != analysis.project_root:
+            errors.append("scan 与 analysis 的项目根目录不一致")
+        failed_files = sorted(
+            item.path for item in scan.files if str(item.parse_status) == "failed"
+        )
+        if failed_files:
+            errors.append(f"存在解析失败文件: {failed_files}")
+
+        expected = {item.qualified_name for item in analysis.functions}
+        assigned = [
+            symbol for unit in work_units.units for symbol in unit.symbol_ids
+        ]
+        duplicates = sorted(
+            symbol for symbol, count in Counter(assigned).items() if count > 1
+        )
+        missing = sorted(expected - set(assigned))
+        unknown = sorted(set(assigned) - expected)
+        if duplicates:
+            errors.append(f"函数被分配到多个语义簇: {duplicates}")
+        if missing:
+            errors.append(f"函数未分配语义簇: {missing}")
+        if unknown:
+            errors.append(f"语义簇包含未知函数: {unknown}")
+
+        contexts_by_unit = {item.unit.unit_id: item for item in contexts}
+        if len(contexts_by_unit) != len(contexts):
+            errors.append("语义预检上下文包含重复 unit_id")
+        for unit in work_units.units:
+            context = contexts_by_unit.get(unit.unit_id)
+            if context is None:
+                errors.append(f"语义簇缺少预检上下文: {unit.unit_id}")
+                continue
+            actual_symbols = [item.symbol_id for item in context.functions]
+            if actual_symbols != unit.symbol_ids:
+                errors.append(f"语义簇上下文函数集合不匹配: {unit.unit_id}")
+            if context.project_root != analysis.project_root:
+                errors.append(f"语义簇项目根目录不匹配: {unit.unit_id}")
+            if context.estimated_tokens != unit.estimated_tokens:
+                errors.append(
+                    f"语义簇分组与最终提示估算不一致: {unit.unit_id} "
+                    f"({unit.estimated_tokens} != {context.estimated_tokens})"
+                )
+            if context.estimated_tokens > work_units.token_budget:
+                errors.append(
+                    f"语义簇上下文超出预算: {unit.unit_id} "
+                    f"({context.estimated_tokens} > {work_units.token_budget})"
+                )
+            empty_sources = [
+                item.symbol_id for item in context.functions if not item.source.strip()
+            ]
+            if empty_sources:
+                errors.append(
+                    f"语义簇包含空源码上下文: {unit.unit_id} {empty_sources}"
+                )
+        if errors:
+            raise QualityGateError(
+                "语义预检失败，尚未调用 LLM: " + "; ".join(errors)
+            )

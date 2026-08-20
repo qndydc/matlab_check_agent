@@ -1,0 +1,43 @@
+services:
+  matlab-atlas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matlab-atlas:0.1.0
+    container_name: matlab-atlas
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${MATLAB_BIND_ADDRESS:-127.0.0.1}:${MATLAB_WEB_PORT:-8000}:8000"
+    environment:
+      MATLAB_REFACTOR_INPUT_PATH: /projects
+      MATLAB_REFACTOR_CODE_OUTPUT_DIR: /data/refactored-projects
+      MATLAB_REFACTOR_REPORT_OUTPUT_DIR: /data/reports
+      MATLAB_REFACTOR_GRAPH_OUTPUT_DIR: /data/graphs
+      MATLAB_REFACTOR_ARTIFACT_DIR: /data/jobs
+      MATLAB_REFACTOR_STATE_DB: /data/refactor-agent.db
+      MATLAB_REFACTOR_WEB_DB: /data/web-projects.db
+      MATLAB_REFACTOR_CHECKPOINT_DB: /data/langgraph-checkpoints.db
+      MATLAB_REFACTOR_LLM_API_KEY_ENV: DEEPSEEK_API_KEY
+      MATLAB_REFACTOR_LLM_BASE_URL: ${MATLAB_REFACTOR_LLM_BASE_URL:-https://api.deepseek.com}
+      MATLAB_REFACTOR_LLM_MODEL: ${MATLAB_REFACTOR_LLM_MODEL:-deepseek-v4-pro}
+    volumes:
+      - type: bind
+        source: ${MATLAB_PROJECTS_PATH:-./projects}
+        target: /projects
+        read_only: true
+      - type: bind
+        source: ${MATLAB_DATA_PATH:-./var/docker-data}
+        target: /data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

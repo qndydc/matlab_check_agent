@@ -8,18 +8,28 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from matlab_refactor_agent.agents.semantic_annotation import (
+    SemanticContextBuilder,
     SemanticWorkUnitBuilder,
 )
-from matlab_refactor_agent.domain.models import AnalysisResult
-from matlab_refactor_agent.domain.changes import ChangeSet
-from matlab_refactor_agent.domain.planning import (
-    RefactorPlanningCandidates,
-    ReviewDecision,
+from matlab_refactor_agent.domain.models import (
+    AnalysisResult,
+    DependencyEdge,
+    FunctionInfo,
+    ScanResult,
 )
+from matlab_refactor_agent.domain.exceptions import (
+    LLMOutputTruncatedError,
+    QualityGateError,
+)
+from matlab_refactor_agent.domain.changes import ChangeSet
+from matlab_refactor_agent.domain.planning import ReviewDecision
 from matlab_refactor_agent.domain.reporting import NaturalLanguageReport
 from matlab_refactor_agent.domain.validation import ValidationResult
 from matlab_refactor_agent.infrastructure.config import AppSettings
+from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.infrastructure.llm import FakeStructuredLLMClient
 from matlab_refactor_agent.interfaces.cli.main import main as cli_main
 from matlab_refactor_agent.orchestration import Orchestrator, SQLiteStateManager
@@ -37,21 +47,17 @@ def _semantic_response(system_prompt: str, user_prompt: str, response_model):
     """作用：从 Agent 的真实上下文生成确定性结构化响应；输入：提示；输出：假 LLM JSON。"""
 
     context = json.loads(user_prompt)
-    if response_model.__name__ == "FileAnnotation":
+    if response_model.__name__ == "FileAnnotationDraft":
         functions = context["functions"]
         return {
-            "file_path": context["file_path"],
             "role": "汇总该文件内函数并承担对应的 MATLAB 处理职责",
-            "function_symbols": [item["symbol_id"] for item in functions],
             "risks": sorted({risk for item in functions for risk in item["risks"]}),
             "confidence": sum(item["confidence"] for item in functions) / len(functions),
         }
-    if response_model.__name__ == "ProjectAnnotation":
+    if response_model.__name__ == "ProjectAnnotationDraft":
         return {
             "purpose": "该项目用于演示 MATLAB 数据加载、处理与依赖分析流程",
             "usage": "从入口函数开始运行，并根据文件职责准备所需输入数据",
-            "entry_points": context["entry_points"],
-            "files": [item["file_path"] for item in context["files"]],
             "risks": sorted({risk for item in context["files"] for risk in item["risks"]}),
             "confidence": (
                 sum(item["confidence"] for item in context["files"])
@@ -79,14 +85,10 @@ def _semantic_response(system_prompt: str, user_prompt: str, response_model):
             "unassigned_symbols": [],
             "assumptions": [],
         }
-    if response_model.__name__ == "NamingDirectoryResponse":
+    if response_model.__name__ == "NamingDirectoryDraft":
         return {
-            "project_root": context["project_root"],
             "changes": [],
             "directory_rules": ["保持现有 MATLAB package 目录语义"],
-            "unchanged_symbols": [
-                item["symbol_id"] for item in context["functions"]
-            ],
             "assumptions": [],
         }
     if response_model.__name__ == "RepairProposal":
@@ -180,10 +182,8 @@ def test_fake_llm_semantic_annotation_closed_loop(tmp_path: Path) -> None:
     response_names = {item[2] for item in client.calls}
     assert {
         "ClusterAnnotationResponse",
-        "FileAnnotation",
-        "ProjectAnnotation",
-        "ModuleResponsibilityResponse",
-        "NamingDirectoryResponse",
+        "FileAnnotationDraft",
+        "ProjectAnnotationDraft",
     } <= response_names
     for _, prompt, response_name in client.calls:
         context = json.loads(prompt)
@@ -216,21 +216,9 @@ def test_fake_llm_semantic_annotation_closed_loop(tmp_path: Path) -> None:
     assert "propose_repair" in mermaid
     assert "repair_review" in mermaid
     assert "generate_report" in mermaid
-    assert "module_responsibility" in outcome.artifacts
-    assert "naming_directory" in outcome.artifacts
-    assert "refactor_planning_candidates" in outcome.artifacts
-    candidates = orchestrator.artifact_store.read_model(
-        outcome.artifacts["refactor_planning_candidates"],
-        RefactorPlanningCandidates,
-    )
-    assigned = {
-        symbol
-        for module in candidates.module_responsibility.modules
-        for symbol in module.symbol_ids
-    }
-    assert assigned == {item.symbol_id for item in outcome.index.functions}
-
-
+    assert "module_responsibility" not in outcome.artifacts
+    assert "naming_directory" not in outcome.artifacts
+    assert "refactor_planning_candidates" not in outcome.artifacts
 def test_work_units_keep_cycles_in_one_cluster(tmp_path: Path) -> None:
     """作用：验证 SCC 不被 token 分片拆散；输入：真实分析结果；输出：cycleA/cycleB 同簇断言。"""
 
@@ -244,10 +232,44 @@ def test_work_units_keep_cycles_in_one_cluster(tmp_path: Path) -> None:
     analysis_outcome = Orchestrator.from_settings(settings).run_analysis(FIXTURE)
     analysis = AnalysisResult.model_validate(analysis_outcome.result)
 
-    units = SemanticWorkUnitBuilder(token_budget=64).build(analysis)
+    units = SemanticWorkUnitBuilder(
+        token_budget=64, max_functions_per_unit=1
+    ).build(analysis)
 
     cycle_unit = next(unit for unit in units.units if "cycleA" in unit.symbol_ids)
     assert {"cycleA", "cycleB"}.issubset(cycle_unit.symbol_ids)
+
+
+def test_work_units_limit_function_count_outside_atomic_scc() -> None:
+    """作用：验证普通工作单元受函数数量上限约束，而 SCC 原子组保持不拆分。"""
+
+    functions = [
+        FunctionInfo(
+            name=f"f{index}",
+            qualified_name=f"f{index}",
+            file_path="chain.m",
+            line_count=1,
+        )
+        for index in range(10)
+    ]
+    analysis = AnalysisResult(
+        project_root=".",
+        functions=functions,
+        dependencies=[
+            DependencyEdge(source=f"f{index}", target=f"f{index + 1}")
+            for index in range(9)
+        ],
+    )
+
+    units = SemanticWorkUnitBuilder(
+        token_budget=100_000,
+        max_functions_per_unit=3,
+    ).build(analysis)
+
+    assert all(len(unit.symbol_ids) <= 3 for unit in units.units)
+    assert [symbol for unit in units.units for symbol in unit.symbol_ids] == [
+        f"f{index}" for index in range(10)
+    ]
 
 
 def test_work_units_follow_stable_topological_order() -> None:
@@ -277,6 +299,130 @@ def test_work_units_follow_stable_topological_order() -> None:
     units = SemanticWorkUnitBuilder(token_budget=32).build(analysis).units
 
     assert [unit.symbol_ids for unit in units] == [["z_entry"], ["a_leaf"]]
+
+
+def test_work_units_use_final_prompt_estimate_to_split_context(tmp_path: Path) -> None:
+    """作用：验证分组与最终缩进 JSON 提示共用估算口径，避免装箱成功后发送前超限。"""
+
+    project = tmp_path / "project"
+    project.mkdir()
+    source = "\n".join(
+        ["function y = first(x)", *[f"y = x + {index}; % 中文上下文" for index in range(35)], "end",
+         "function y = second(x)", *[f"y = x * {index + 1}; % 中文上下文" for index in range(35)], "end"]
+    )
+    (project / "large.m").write_text(source, encoding="utf-8")
+    analysis = AnalysisResult(
+        project_root=str(project),
+        functions=[
+            FunctionInfo(name="first", qualified_name="first", file_path="large.m", start_line=1, end_line=37, line_count=37),
+            FunctionInfo(name="second", qualified_name="second", file_path="large.m", start_line=38, end_line=74, line_count=37),
+        ],
+        dependencies=[DependencyEdge(source="first", target="second")],
+    )
+    artifacts = ArtifactStore(tmp_path / "jobs")
+    scan_ref = artifacts.write_model("estimate", "scan.json", ScanResult(project_root=str(project)))
+    analysis_ref = artifacts.write_model("estimate", "analysis.json", analysis)
+    context_builder = SemanticContextBuilder(artifacts)
+
+    single_units = SemanticWorkUnitBuilder(token_budget=100_000).build(analysis).units
+    combined_tokens = context_builder.estimate(
+        scan_reference=scan_ref,
+        analysis_reference=analysis_ref,
+        unit=single_units[0],
+    )
+    budget = combined_tokens - 1
+    units = SemanticWorkUnitBuilder(token_budget=budget).build(
+        analysis,
+        context_estimator=lambda unit: context_builder.estimate(
+            scan_reference=scan_ref,
+            analysis_reference=analysis_ref,
+            unit=unit,
+        ),
+    ).units
+
+    assert [unit.symbol_ids for unit in units] == [["first"], ["second"]]
+    for unit in units:
+        context = context_builder.build(
+            scan_reference=scan_ref,
+            analysis_reference=analysis_ref,
+            unit=unit,
+            token_budget=budget,
+        )
+        assert context.estimated_tokens == unit.estimated_tokens
+        assert context.estimated_tokens <= budget
+
+
+def test_semantic_preflight_blocks_all_llm_calls_for_oversized_atomic_unit(
+    tmp_path: Path,
+) -> None:
+    """作用：验证任一不可拆函数簇超预算时，在 fan-out 前阻断全部模型调用。"""
+
+    project = tmp_path / "oversized"
+    project.mkdir()
+    lines = ["function y = huge(x)"]
+    lines.extend(f"y = y + x + {index}; % 足够长的中文源码注释" for index in range(220))
+    lines.append("end")
+    (project / "huge.m").write_text("\n".join(lines), encoding="utf-8")
+    settings = AppSettings(
+        orchestrator={
+            "state_db": tmp_path / "state.db",
+            "checkpoint_db": tmp_path / "checkpoints.db",
+            "artifact_dir": tmp_path / "jobs",
+        },
+        llm={"semantic_token_budget": 512},
+    )
+    client = FakeStructuredLLMClient(_semantic_response)
+    orchestrator = Orchestrator.from_settings(settings, semantic_client=client)
+
+    with pytest.raises(QualityGateError, match="语义预检失败，尚未调用 LLM"):
+        orchestrator.run_annotation(project)
+
+    assert client.calls == []
+
+
+def test_output_truncation_splits_non_scc_unit_and_resubmits(tmp_path: Path) -> None:
+    """作用：验证输出截断时沿 SCC 边界二分，并自动完成两个子簇注释。"""
+
+    project = tmp_path / "split-output"
+    project.mkdir()
+    (project / "main.m").write_text(
+        "function y = main(x)\ny = helper(x);\nend\n"
+        "function y = helper(x)\ny = x + 1;\nend\n",
+        encoding="utf-8",
+    )
+    settings = AppSettings(
+        orchestrator={
+            "state_db": tmp_path / "state.db",
+            "checkpoint_db": tmp_path / "checkpoints.db",
+            "artifact_dir": tmp_path / "jobs",
+        },
+        llm={"semantic_max_functions_per_unit": 8},
+    )
+
+    def truncate_multi_function(system_prompt: str, user_prompt: str, response_model):
+        context = json.loads(user_prompt)
+        if (
+            response_model.__name__ == "ClusterAnnotationResponse"
+            and len(context["functions"]) > 1
+        ):
+            raise LLMOutputTruncatedError("模型输出因 token 上限被截断")
+        return _semantic_response(system_prompt, user_prompt, response_model)
+
+    client = FakeStructuredLLMClient(truncate_multi_function)
+    outcome = Orchestrator.from_settings(
+        settings, semantic_client=client
+    ).run_annotation(project)
+
+    assert {item.symbol_id for item in outcome.index.functions} == {
+        "main",
+        "main>helper",
+    }
+    cluster_calls = [
+        call for call in client.calls if call[2] == "ClusterAnnotationResponse"
+    ]
+    assert len(cluster_calls) == 3
+    assert any("-a-" in key for key in outcome.artifacts)
+    assert any("-b-" in key for key in outcome.artifacts)
 
 
 def test_langgraph_resumes_failed_semantic_node_from_checkpoint(
@@ -328,9 +474,10 @@ def test_langgraph_resumes_failed_semantic_node_from_checkpoint(
     assert status == "failed"
     tasks_before = SQLiteStateManager(state_db).task_statuses(job_id)
 
-    resumed = orchestrator.resume(job_id)
+    resumed_outcome = orchestrator.run_annotation(project)
 
-    assert Path(resumed["semantic_index_ref"]).is_file()
+    assert resumed_outcome.job_id == job_id
+    assert Path(resumed_outcome.artifacts["semantic_index"]).is_file()
     assert str(SQLiteStateManager(state_db).get_job(job_id).status) == "completed"
     assert SQLiteStateManager(state_db).task_statuses(job_id) == tasks_before
     assert semantic_attempts == 2

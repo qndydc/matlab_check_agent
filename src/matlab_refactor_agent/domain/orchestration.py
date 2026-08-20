@@ -22,6 +22,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def new_job_id() -> str:
+    """作用：生成可排序的本地绝对时间 Job ID；输入：系统时钟；输出：年月日时分秒及微秒数字串。"""
+
+    return datetime.now().astimezone().strftime("%Y%m%d%H%M%S%f")
+
+
 class TaskEnvelope(DomainModel):
     #DomainModel是自定义基类，几乎确定继承自 Pydantic 的 BaseModel（或 RootModel）。
     #BaseModel 的元类是 ModelMetaclass，重写了 __new__ 来收集字段定义，构建验证逻辑。
@@ -53,7 +59,7 @@ class WorkerResult(DomainModel):
 class JobRecord(DomainModel):
     """作用：记录全局 Job 状态；输入：项目路径和状态事件；输出：可持久化记录；数据流：Orchestrator -> StateManager。"""
 
-    job_id: str = Field(default_factory=lambda: uuid4().hex)
+    job_id: str = Field(default_factory=new_job_id)
     project_root: str
     status: JobStatus = JobStatus.CREATED
     error: str | None = None

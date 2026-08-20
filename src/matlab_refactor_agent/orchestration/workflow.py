@@ -6,6 +6,7 @@ Referenced By: orchestration.orchestrator、AnalysisService 和工作流集成�
 
 from __future__ import annotations
 
+import hashlib
 import operator
 import sqlite3
 from collections.abc import Callable
@@ -32,12 +33,19 @@ from matlab_refactor_agent.agents.semantic_annotation.aggregator import (
     SemanticAnnotationAggregator,
 )
 from matlab_refactor_agent.agents.semantic_annotation.context_builder import (
+    SemanticContextBuilder,
     SemanticWorkUnitBuilder,
+    split_semantic_work_unit,
 )
 from matlab_refactor_agent.domain.agents import AgentRequest, AgentResult
 from matlab_refactor_agent.domain.changes import ChangeSet
 from matlab_refactor_agent.domain.enums import AgentKind, JobStatus, TaskStatus, WorkerKind
-from matlab_refactor_agent.domain.exceptions import OrchestrationError
+from matlab_refactor_agent.domain.exceptions import (
+    ArtifactError,
+    LLMOutputTruncatedError,
+    OrchestrationError,
+    QualityGateError,
+)
 from matlab_refactor_agent.domain.models import (
     AnalysisResult,
     MatlabFileManifest,
@@ -67,9 +75,11 @@ from matlab_refactor_agent.domain.reporting import (
 from matlab_refactor_agent.domain.semantics import (
     ClusterAnnotationResponse,
     SemanticAnnotationOutcome,
+    SemanticClusterContext,
     SemanticConflicts,
     SemanticIndex,
     SemanticWorkUnit,
+    SemanticWorkUnits,
 )
 from matlab_refactor_agent.domain.validation import (
     RepairProposal,
@@ -87,6 +97,7 @@ from matlab_refactor_agent.workers import (
     ScannerAgent,
     WorkerContext,
 )
+from matlab_refactor_agent.workers.scanning import MatlabFileDiscovery
 
 from .conflict_resolver import ConflictResolver
 from .changeset_executor import ChangeSetExecutor
@@ -119,6 +130,7 @@ class WorkflowState(TypedDict, total=False):
     job_id: str
     project_root: str
     target: WorkflowTarget
+    source_fingerprint: str
     artifacts: Annotated[dict[str, str], _merge_artifacts]
     manifest_ref: str
     scan_task_id: str
@@ -195,6 +207,19 @@ class _StageExecutor:
             raise
         finally:
             self._conflicts.release(running.task_id)
+
+    def validate_semantic_preflight(
+        self,
+        scan: ScanResult,
+        analysis: AnalysisResult,
+        work_units: SemanticWorkUnits,
+        contexts: list[SemanticClusterContext],
+    ) -> None:
+        """作用：把非 Worker 的语义预检接入统一 QualityGate。"""
+
+        self._quality_gate.validate_semantic_preflight(
+            scan, analysis, work_units, contexts
+        )
 
 
 class LangGraphWorkflow:
@@ -292,7 +317,13 @@ class LangGraphWorkflow:
         )
 
     def run_annotation(self, project_root: Path) -> SemanticAnnotationOutcome:
-        state = self._run(project_root, "annotate")
+        """作用：优先恢复同项目兼容 checkpoint；输入：项目目录；输出：三级语义结果。"""
+
+        root = project_root.expanduser().resolve()
+        fingerprint = self._source_fingerprint(root)
+        state = self._recover_annotation(root, fingerprint)
+        if state is None:
+            state = self._run(root, "annotate", fingerprint)
         index = self._artifacts.read_model(
             state["semantic_index_ref"], SemanticIndex
         )
@@ -408,7 +439,14 @@ class LangGraphWorkflow:
 
         return self._graph.get_graph().draw_mermaid()
 
-    def _run(self, project_root: Path, target: WorkflowTarget) -> WorkflowState:
+    def _run(
+        self,
+        project_root: Path,
+        target: WorkflowTarget,
+        source_fingerprint: str | None = None,
+    ) -> WorkflowState:
+        """作用：创建并执行新工作流；输入：项目、目标和可选源码指纹；输出：最终状态。"""
+
         job = JobRecord(project_root=str(project_root.expanduser().resolve()))
         self._state.save_job(job)
         running = self._state.set_job_status(job, JobStatus.RUNNING)
@@ -416,6 +454,7 @@ class LangGraphWorkflow:
             "job_id": job.job_id,
             "project_root": job.project_root,
             "target": target,
+            "source_fingerprint": source_fingerprint or "",
             "artifacts": {},
             "parse_chunk_refs": [],
             "parse_task_ids": [],
@@ -430,6 +469,47 @@ class LangGraphWorkflow:
         except Exception as exc:
             self._state.set_job_status(running, JobStatus.FAILED, str(exc))
             raise self._as_orchestration_error(exc) from exc
+
+    def _recover_annotation(
+        self, project_root: Path, source_fingerprint: str
+    ) -> WorkflowState | None:
+        """作用：查找并恢复同项目注释进度；输入：规范路径和源码指纹；输出：恢复状态或空。"""
+
+        for job in self._state.jobs_for_project(str(project_root)):
+            snapshot = self._graph.get_state(self._graph_config(job.job_id))
+            state = dict(snapshot.values)
+            if state.get("target") != "annotate":
+                continue
+            checkpoint_fingerprint = state.get("source_fingerprint")
+            if checkpoint_fingerprint and checkpoint_fingerprint != source_fingerprint:
+                continue
+            if state.get("semantic_index_ref"):
+                try:
+                    self._artifacts.read_model(
+                        state["semantic_index_ref"], SemanticIndex
+                    )
+                except ArtifactError:
+                    continue
+                if job.status != JobStatus.COMPLETED:
+                    self._state.set_job_status(job, JobStatus.COMPLETED)
+                return state
+            if job.status in {JobStatus.FAILED, JobStatus.RUNNING} and snapshot.next:
+                return self.resume(job.job_id)
+        return None
+
+    def _source_fingerprint(self, project_root: Path) -> str:
+        """作用：计算可恢复性指纹；输入：项目目录；输出：受扫描规则约束的 MATLAB 源码哈希。"""
+
+        manifest = MatlabFileDiscovery(
+            self._settings.project.exclude_patterns
+        ).discover(project_root)
+        digest = hashlib.sha256()
+        for relative_path in manifest.files:
+            digest.update(relative_path.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update((project_root / relative_path).read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()
 
     def _graph_config(self, job_id: str) -> dict[str, Any]:
         return {
@@ -507,8 +587,11 @@ class LangGraphWorkflow:
             ["annotate_unit", "aggregate_semantics"],
         )
         graph.add_edge("annotate_unit", "aggregate_semantics")
-        graph.add_edge("aggregate_semantics", "module_responsibility")
-        graph.add_edge("aggregate_semantics", "naming_directory")
+        graph.add_conditional_edges(
+            "aggregate_semantics",
+            self._after_semantics,
+            ["module_responsibility", "naming_directory", "finish"],
+        )
         graph.add_edge(
             ["module_responsibility", "naming_directory"],
             "collect_planning_candidates",
@@ -654,13 +737,57 @@ class LangGraphWorkflow:
             else "finish"
         )
 
+    @staticmethod
+    def _after_semantics(state: WorkflowState) -> str | list[str]:
+        """作用：让纯注释任务及时结束，仅规划任务继续调用两个规划 Agent。"""
+
+        if state["target"] == "plan":
+            return ["module_responsibility", "naming_directory"]
+        return "finish"
+
     def _build_semantic_units(self, state: WorkflowState) -> dict[str, Any]:
+        """作用：使用最终提示的真实 token 口径生成不会在上下文阶段意外溢出的语义簇。"""
+
+        scan = self._artifacts.read_model(state["scan_result_ref"], ScanResult)
         analysis = self._artifacts.read_model(
             state["analysis_result_ref"], AnalysisResult
         )
+        context_builder = SemanticContextBuilder(self._artifacts)
         work_units = SemanticWorkUnitBuilder(
-            self._settings.llm.semantic_token_budget
-        ).build(analysis)
+            self._settings.llm.semantic_token_budget,
+            self._settings.llm.semantic_max_functions_per_unit,
+        ).build(
+            analysis,
+            context_estimator=lambda unit: context_builder.estimate(
+                scan_reference=state["scan_result_ref"],
+                analysis_reference=state["analysis_result_ref"],
+                unit=unit,
+            ),
+        )
+        contexts: list[SemanticClusterContext] = []
+        preflight_errors: list[str] = []
+        for unit in work_units.units:
+            try:
+                contexts.append(
+                    context_builder.build(
+                        scan_reference=state["scan_result_ref"],
+                        analysis_reference=state["analysis_result_ref"],
+                        unit=unit,
+                        token_budget=work_units.token_budget,
+                    )
+                )
+            except OrchestrationError as error:
+                preflight_errors.append(str(error))
+        if preflight_errors:
+            raise QualityGateError(
+                "语义预检失败，尚未调用 LLM: " + "; ".join(preflight_errors)
+            )
+        self._stage_executor.validate_semantic_preflight(
+            scan,
+            analysis,
+            work_units,
+            contexts,
+        )
         reference = self._artifacts.write_model(
             state["job_id"], "semantic-work-units.json", work_units
         )
@@ -693,7 +820,22 @@ class LangGraphWorkflow:
         ]
 
     def _annotate_unit(self, state: WorkflowState) -> dict[str, Any]:
+        """作用：执行函数簇注释，并在输出截断时按 SCC 边界自动二分重提。"""
+
         unit = SemanticWorkUnit.model_validate(state["work_unit"])
+        references, artifacts = self._annotate_with_output_split(state, unit)
+        return {
+            "annotation_refs": references,
+            "artifacts": artifacts,
+        }
+
+    def _annotate_with_output_split(
+        self,
+        state: WorkflowState,
+        unit: SemanticWorkUnit,
+    ) -> tuple[list[str], dict[str, str]]:
+        """作用：递归执行语义 Agent；仅对输出截断且可沿 SCC 边界拆分的簇重试。"""
+
         request = AgentRequest(
             job_id=state["job_id"],
             agent_kind=AgentKind.SEMANTIC_ANNOTATION,
@@ -706,19 +848,35 @@ class LangGraphWorkflow:
                 "token_budget": self._settings.llm.semantic_token_budget,
             },
         )
-        result = SemanticAnnotationAgent(self._get_semantic_client()).run(
-            request,
-            AgentContext(artifact_store=self._artifacts),
-        )
+        try:
+            result = SemanticAnnotationAgent(self._get_semantic_client()).run(
+                request,
+                AgentContext(artifact_store=self._artifacts),
+            )
+        except LLMOutputTruncatedError as error:
+            analysis = self._artifacts.read_model(
+                state["analysis_result_ref"], AnalysisResult
+            )
+            children = split_semantic_work_unit(unit, analysis)
+            if children is None:
+                raise OrchestrationError(
+                    f"函数簇 {unit.unit_id} 是不可拆 SCC，模型输出仍超过上限"
+                ) from error
+            references: list[str] = []
+            artifacts: dict[str, str] = {}
+            for child in children:
+                child_refs, child_artifacts = self._annotate_with_output_split(
+                    state, child
+                )
+                references.extend(child_refs)
+                artifacts = _merge_artifacts(artifacts, child_artifacts)
+            return references, artifacts
         if not result.success or not result.artifacts:
             raise OrchestrationError(
                 f"SemanticAnnotationAgent 返回失败: {result.diagnostics}"
             )
         reference = next(iter(result.artifacts.values()))
-        return {
-            "annotation_refs": [reference],
-            "artifacts": result.artifacts,
-        }
+        return [reference], result.artifacts
 
     def _aggregate_semantics(self, state: WorkflowState) -> dict[str, Any]:
         analysis = self._artifacts.read_model(

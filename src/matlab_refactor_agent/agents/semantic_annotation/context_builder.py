@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Callable
 from pathlib import Path
 
 import networkx as nx
@@ -30,6 +31,30 @@ def estimate_tokens(text: str) -> int: #按长度/4估算token消耗
     return math.ceil(len(text) / 4)
 
 
+def finalize_context_tokens(
+    context: SemanticClusterContext,
+) -> SemanticClusterContext:
+    """作用：按 Agent 实际发送的缩进 JSON 反复收敛并写入统一 token 估算值。"""
+
+    current = context
+    for _ in range(4):
+        token_count = estimate_tokens(current.model_dump_json(indent=2))
+        if (
+            token_count == current.estimated_tokens
+            and token_count == current.unit.estimated_tokens
+        ):
+            return current
+        current = current.model_copy(
+            update={
+                "estimated_tokens": token_count,
+                "unit": current.unit.model_copy(
+                    update={"estimated_tokens": token_count}
+                ),
+            }
+        )
+    return current
+
+
 class SemanticWorkUnitBuilder: #语义分组
     """作用：保持 SCC 原子性并按连通簇和预算分片；输入：分析结果；输出：稳定函数簇。"""
 
@@ -40,12 +65,25 @@ class SemanticWorkUnitBuilder: #语义分组
     # → 按 token 预算组合
     # → 生成多个 SemanticWorkUnit
 
-    def __init__(self, token_budget: int = 6000) -> None:
+    def __init__(
+        self,
+        token_budget: int = 6000,
+        max_functions_per_unit: int = 8,
+    ) -> None:
         if token_budget <= 0:
             raise ValueError("token_budget 必须大于 0")
+        if max_functions_per_unit <= 0:
+            raise ValueError("max_functions_per_unit 必须大于 0")
         self.token_budget = token_budget
+        self.max_functions_per_unit = max_functions_per_unit
 
-    def build(self, analysis: AnalysisResult) -> SemanticWorkUnits:
+    def build(
+        self,
+        analysis: AnalysisResult,
+        context_estimator: Callable[[SemanticWorkUnit], int] | None = None,
+    ) -> SemanticWorkUnits:
+        """作用：按 SCC 拓扑顺序装箱，并可使用最终上下文的真实估算口径切簇。"""
+
         graph = nx.DiGraph()
         graph.add_nodes_from(item.qualified_name for item in analysis.functions)
         graph.add_edges_from((edge.source, edge.target) for edge in analysis.dependencies)
@@ -71,16 +109,32 @@ class SemanticWorkUnitBuilder: #语义分组
             current: list[str] = []
             current_tokens = 0
             for group in atomic_groups:
-                group_tokens = sum(estimates[symbol] for symbol in group)
-                if current and current_tokens + group_tokens > self.token_budget:
+                candidate = [*current, *group]
+                candidate_tokens = self._estimate_unit(
+                    unit_number,
+                    candidate,
+                    estimates,
+                    context_estimator,
+                )
+                exceeds_limit = (
+                    candidate_tokens > self.token_budget
+                    or len(candidate) > self.max_functions_per_unit
+                )
+                if current and exceeds_limit:
                     units.append(
                         self._unit(unit_number, current, current_tokens)
                     )
                     unit_number += 1
-                    current = []
-                    current_tokens = 0
-                current.extend(group)
-                current_tokens += group_tokens
+                    current = list(group)
+                    current_tokens = self._estimate_unit(
+                        unit_number,
+                        current,
+                        estimates,
+                        context_estimator,
+                    )
+                else:
+                    current = candidate
+                    current_tokens = candidate_tokens
             if current:
                 units.append(self._unit(unit_number, current, current_tokens))
                 unit_number += 1
@@ -90,6 +144,22 @@ class SemanticWorkUnitBuilder: #语义分组
             units=units,
         )
 
+    @classmethod
+    def _estimate_unit(
+        cls,
+        index: int,
+        symbols: list[str],
+        fallback_estimates: dict[str, int],
+        context_estimator: Callable[[SemanticWorkUnit], int] | None,
+    ) -> int:
+        """作用：优先计算完整提示上下文，否则兼容使用旧的行数粗估。"""
+
+        fallback = sum(fallback_estimates[symbol] for symbol in symbols)
+        if context_estimator is None:
+            return fallback
+        unit = cls._unit(index, symbols, fallback)
+        return context_estimator(unit)
+
     @staticmethod
     def _unit(index: int, symbols: list[str], tokens: int) -> SemanticWorkUnit:
         digest = hashlib.sha256("\0".join(symbols).encode("utf-8")).hexdigest()[:10]
@@ -98,6 +168,60 @@ class SemanticWorkUnitBuilder: #语义分组
             symbol_ids=sorted(symbols),
             estimated_tokens=tokens,
         )
+
+
+def split_semantic_work_unit(
+    unit: SemanticWorkUnit,
+    analysis: AnalysisResult,
+) -> tuple[SemanticWorkUnit, SemanticWorkUnit] | None:
+    """作用：沿 SCC 拓扑边界把输出超限工作单元近似二分；单一 SCC 返回空。"""
+
+    symbols = set(unit.symbol_ids)
+    graph = nx.DiGraph()
+    graph.add_nodes_from(unit.symbol_ids)
+    graph.add_edges_from(
+        (edge.source, edge.target)
+        for edge in analysis.dependencies
+        if edge.source in symbols and edge.target in symbols
+    )
+    condensation = nx.condensation(graph)
+    groups = [
+        sorted(condensation.nodes[node]["members"])
+        for node in nx.lexicographical_topological_sort(
+            condensation,
+            key=lambda item: min(condensation.nodes[item]["members"]),
+        )
+    ]
+    if len(groups) < 2:
+        return None
+    cumulative = 0
+    boundaries: list[tuple[float, int]] = []
+    target = len(unit.symbol_ids) / 2
+    for index, group in enumerate(groups[:-1], start=1):
+        cumulative += len(group)
+        boundaries.append((abs(cumulative - target), index))
+    split_at = min(boundaries)[1]
+    left_symbols = [symbol for group in groups[:split_at] for symbol in group]
+    right_symbols = [symbol for group in groups[split_at:] for symbol in group]
+    return (
+        _split_unit(unit.unit_id, "a", left_symbols),
+        _split_unit(unit.unit_id, "b", right_symbols),
+    )
+
+
+def _split_unit(
+    parent_id: str,
+    suffix: str,
+    symbols: list[str],
+) -> SemanticWorkUnit:
+    """作用：为自动二分后的子工作单元生成稳定且可审计的标识。"""
+
+    digest = hashlib.sha256("\0".join(symbols).encode("utf-8")).hexdigest()[:10]
+    return SemanticWorkUnit(
+        unit_id=f"{parent_id}-{suffix}-{digest}",
+        symbol_ids=sorted(symbols),
+        estimated_tokens=0,
+    )
 
 
 class SemanticContextBuilder: #构建源码上下文
@@ -111,6 +235,9 @@ class SemanticContextBuilder: #构建源码上下文
 
     def __init__(self, artifact_store: ArtifactStore) -> None:
         self._artifacts = artifact_store
+        self._scan_cache: dict[str, ScanResult] = {}
+        self._analysis_cache: dict[str, AnalysisResult] = {}
+        self._source_cache: dict[tuple[str, str], FunctionSourceContext] = {}
 
     def build(
         self,
@@ -120,8 +247,54 @@ class SemanticContextBuilder: #构建源码上下文
         unit: SemanticWorkUnit,
         token_budget: int,
     ) -> SemanticClusterContext:
-        scan = self._artifacts.read_model(scan_reference, ScanResult)
-        analysis = self._artifacts.read_model(analysis_reference, AnalysisResult)
+        context = self._context(
+            scan_reference=scan_reference,
+            analysis_reference=analysis_reference,
+            unit=unit,
+        )
+        finalized = finalize_context_tokens(context)
+        if finalized.estimated_tokens > token_budget:
+            raise OrchestrationError(
+                f"函数簇 {unit.unit_id} 上下文超出预算: "
+                f"{finalized.estimated_tokens} > {token_budget}"
+            )
+        return finalized
+
+    def estimate(
+        self,
+        *,
+        scan_reference: str,
+        analysis_reference: str,
+        unit: SemanticWorkUnit,
+    ) -> int:
+        """作用：使用与 Agent 最终提示完全相同的上下文计算分组预算。"""
+
+        context = self._context(
+            scan_reference=scan_reference,
+            analysis_reference=analysis_reference,
+            unit=unit,
+        )
+        return finalize_context_tokens(context).estimated_tokens
+
+    def _context(
+        self,
+        *,
+        scan_reference: str,
+        analysis_reference: str,
+        unit: SemanticWorkUnit,
+    ) -> SemanticClusterContext:
+        """作用：从缓存的分析 artifact 组装未校验预算的完整语义上下文。"""
+
+        if scan_reference not in self._scan_cache:
+            self._scan_cache[scan_reference] = self._artifacts.read_model(
+                scan_reference, ScanResult
+            )
+        if analysis_reference not in self._analysis_cache:
+            self._analysis_cache[analysis_reference] = self._artifacts.read_model(
+                analysis_reference, AnalysisResult
+            )
+        scan = self._scan_cache[scan_reference]
+        analysis = self._analysis_cache[analysis_reference]
         if scan.project_root != analysis.project_root:
             raise OrchestrationError("scan 与 analysis 的项目根目录不一致")
         functions = {item.qualified_name: item for item in analysis.functions}
@@ -129,25 +302,22 @@ class SemanticContextBuilder: #构建源码上下文
         if missing:
             raise OrchestrationError(f"函数簇包含未知 symbol: {missing}")
         project_root = Path(scan.project_root).expanduser().resolve()
-        source_contexts = [
-            self._source_context(project_root, functions[symbol])
-            for symbol in unit.symbol_ids
-        ]
+        source_contexts = []
+        for symbol in unit.symbol_ids:
+            cache_key = (str(project_root), symbol)
+            if cache_key not in self._source_cache:
+                self._source_cache[cache_key] = self._source_context(
+                    project_root, functions[symbol]
+                )
+            source_contexts.append(self._source_cache[cache_key])
         neighbors = self._neighbors(analysis, set(unit.symbol_ids), functions)
-        context = SemanticClusterContext(
+        return SemanticClusterContext(
             project_root=str(project_root),
             unit=unit,
             functions=source_contexts,
             neighbors=neighbors,
             estimated_tokens=0,
         )
-        token_count = estimate_tokens(context.model_dump_json())
-        if token_count > token_budget:
-            raise OrchestrationError(
-                f"函数簇 {unit.unit_id} 上下文超出预算: "
-                f"{token_count} > {token_budget}"
-            )
-        return context.model_copy(update={"estimated_tokens": token_count})
 
     @staticmethod
     def _source_context(root: Path, function: FunctionInfo) -> FunctionSourceContext:

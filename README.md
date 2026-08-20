@@ -16,6 +16,19 @@ python scripts/start_mvp.py
 
 Web 项目的调用图和三级注释会长期保存到 `var/web-projects.db`。前端“历史项目”面板可以恢复或删除这些本地快照；可通过 `MATLAB_REFACTOR_WEB_DB` 修改数据库路径。
 
+### Windows Docker Desktop
+
+生产镜像由 FastAPI 在一个端口同时提供 React 前端和 API，目标电脑不需要安装 Python、Node.js 或 pnpm。
+
+```powershell
+Copy-Item .env.docker.example .env
+# 编辑 .env 中的 MATLAB_PROJECTS_PATH 和 MATLAB_DATA_PATH，并先创建这两个目录
+docker compose build
+docker compose up -d
+```
+
+浏览器访问 `http://127.0.0.1:8000`。页面中应输入容器路径，例如 `/projects/my-project`，而不是 Windows 盘符路径。完整说明见 [Windows Docker Desktop 部署](docs/docker-windows.md)。
+
 MATLAB Refactor Agent 是一个面向 MATLAB 代码库的 CLI 重构工具。它能够扫描和解析 `.m` 文件、构建调用图、生成语义与重构计划，并在人工批准后把变更应用到隔离的输出目录。输入项目始终只读。
 
 当前版本提供完整 CLI 流程：

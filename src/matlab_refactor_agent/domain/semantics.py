@@ -104,6 +104,14 @@ class FileAnnotation(DomainModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class FileAnnotationDraft(DomainModel):
+    """作用：约束文件级 LLM 只生成语义字段；输入：函数注解；输出：不含路径和符号集合的草稿。"""
+
+    role: str
+    risks: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class ProjectAnnotation(DomainModel):
     """作用：汇总项目入口、主要数据流和风险；输入：分析结果与文件注解；输出：项目级说明。"""
 
@@ -111,6 +119,15 @@ class ProjectAnnotation(DomainModel):
     usage: str = ""
     entry_points: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ProjectAnnotationDraft(DomainModel):
+    """作用：约束项目级 LLM 只生成语义字段；输入：聚合上下文；输出：不含确定性结构字段的草稿。"""
+
+    purpose: str
+    usage: str = ""
     risks: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 

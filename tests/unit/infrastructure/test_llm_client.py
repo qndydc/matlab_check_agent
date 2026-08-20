@@ -9,7 +9,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from matlab_refactor_agent.domain.exceptions import ConfigurationError
+from matlab_refactor_agent.domain.exceptions import (
+    ConfigurationError,
+    LLMOutputTruncatedError,
+)
 from matlab_refactor_agent.infrastructure.config import LLMSettings
 from matlab_refactor_agent.infrastructure.llm import (
     OpenAICompatibleLLMClient,
@@ -26,8 +29,13 @@ class _Answer(BaseModel):
 class _Completions:
     """作用：模拟 OpenAI SDK Chat Completions；输入：响应内容队列；输出：SDK 形状对象。"""
 
-    def __init__(self, contents: list[str | None]) -> None:
+    def __init__(
+        self,
+        contents: list[str | None],
+        finish_reasons: list[str] | None = None,
+    ) -> None:
         self._contents = iter(contents)
+        self._finish_reasons = iter(finish_reasons or ["stop"] * len(contents))
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
@@ -36,15 +44,15 @@ class _Completions:
         return SimpleNamespace(
             choices=[
                 SimpleNamespace(
-                    finish_reason="stop",
+                    finish_reason=next(self._finish_reasons),
                     message=SimpleNamespace(content=content),
                 )
             ]
         )
 
 
-def _sdk(contents: list[str | None]):
-    completions = _Completions(contents)
+def _sdk(contents: list[str | None], finish_reasons: list[str] | None = None):
+    completions = _Completions(contents, finish_reasons)
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=completions)
     )
@@ -77,6 +85,28 @@ def test_openai_compatible_client_retries_invalid_json() -> None:
     assert call["response_format"] == {"type": "json_object"}
     assert call["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "JSON Schema" in call["messages"][0]["content"]
+
+
+def test_openai_compatible_client_classifies_output_truncation() -> None:
+    """作用：验证连续 length 响应转换成可触发工作单元二分的专用异常。"""
+
+    sdk, completions = _sdk(["{}", "{}"], ["length", "length"])
+    client = OpenAICompatibleLLMClient(
+        api_key="test-key",
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-pro",
+        response_retries=1,
+        sdk_client=sdk,
+    )
+
+    with pytest.raises(LLMOutputTruncatedError, match="token 上限"):
+        client.complete(
+            system_prompt="分析 MATLAB",
+            user_prompt="目标上下文",
+            response_model=_Answer,
+        )
+
+    assert len(completions.calls) == 2
 
 
 def test_llm_factory_requires_configured_environment(monkeypatch) -> None:

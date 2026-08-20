@@ -10,10 +10,12 @@ from .client import (
     StructuredLLMClient,
 )
 from .factory import create_llm_client
+from matlab_refactor_agent.domain.exceptions import LLMOutputTruncatedError
 
 __all__ = [
     "FakeStructuredLLMClient",
     "OpenAICompatibleLLMClient",
     "StructuredLLMClient",
+    "LLMOutputTruncatedError",
     "create_llm_client",
 ]

@@ -16,7 +16,10 @@ from openai import OpenAI
 from pydantic import BaseModel
 from pydantic import ValidationError
 
-from matlab_refactor_agent.domain.exceptions import LLMClientError
+from matlab_refactor_agent.domain.exceptions import (
+    LLMClientError,
+    LLMOutputTruncatedError,
+)
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -111,6 +114,7 @@ class OpenAICompatibleLLMClient:
             f"输出必须符合以下 JSON Schema：{schema}"
         )
         last_error = "模型未返回有效 JSON"
+        output_truncated = False
         for _ in range(self._response_retries + 1):
             try:
                 extra_body = (
@@ -138,6 +142,7 @@ class OpenAICompatibleLLMClient:
             try:
                 choice = response.choices[0]
                 if choice.finish_reason == "length":
+                    output_truncated = True
                     raise ValueError("模型输出因 token 上限被截断")
                 content = choice.message.content
                 if not content or not content.strip():
@@ -145,6 +150,11 @@ class OpenAICompatibleLLMClient:
                 return response_model.model_validate_json(content)
             except (IndexError, TypeError, ValueError, ValidationError) as exc:
                 last_error = str(exc)
+        if output_truncated and "token 上限" in last_error:
+            raise LLMOutputTruncatedError(
+                f"LLM 结构化响应在 {self._response_retries + 1} 次尝试后仍无效: "
+                f"{last_error}"
+            )
         raise LLMClientError(
             f"LLM 结构化响应在 {self._response_retries + 1} 次尝试后仍无效: "
             f"{last_error}"

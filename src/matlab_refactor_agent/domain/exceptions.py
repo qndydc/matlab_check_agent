@@ -32,6 +32,10 @@ class LLMClientError(OrchestrationError):
     """作用：报告 LLM 请求、空响应或结构化校验失败；输入：SDK/响应错误；输出：不泄露密钥的业务异常。"""
 
 
+class LLMOutputTruncatedError(LLMClientError):
+    """作用：标识模型输出达到 token 上限；输入：finish_reason=length；输出：允许编排器拆簇重提的异常信号。"""
+
+
 class QualityGateError(OrchestrationError):
     """作用：报告阶段输出不满足质量门禁；输入：校验错误；输出：调度异常；数据流：QualityGate -> Orchestrator。"""
 

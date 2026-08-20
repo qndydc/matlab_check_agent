@@ -6,6 +6,7 @@ Referenced By: pytest Web MVP regression suite.
 
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -92,6 +93,7 @@ def test_analysis_then_annotation_keeps_graph_available(tmp_path: Path) -> None:
     )
     assert created.status_code == 202
     job_id = created.json()["job_id"]
+    assert re.fullmatch(r"\d{20}", job_id)
     assert _wait(client, job_id)["graph_ready"] is True
 
     graph = client.get(f"/api/jobs/{job_id}/graph")
@@ -167,3 +169,23 @@ def test_projects_survive_manager_restart_and_can_be_deleted(tmp_path: Path) -> 
     assert restarted.delete(f"/api/projects/{job_id}").status_code == 204
     assert restarted.get("/api/projects").json() == []
     assert restarted.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_production_app_serves_built_frontend_without_shadowing_api(
+    tmp_path: Path,
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "index.html").write_text(
+        "<!doctype html><title>MATLAB Atlas</title>", encoding="utf-8"
+    )
+    manager = MvpJobManager(
+        service_factory=_FakeService,
+        executor=ThreadPoolExecutor(max_workers=1),
+        store=SQLiteWebProjectStore(tmp_path / "web-projects.db"),
+    )
+    client = TestClient(create_app(manager, frontend_dir=frontend))
+
+    assert client.get("/").status_code == 200
+    assert "MATLAB Atlas" in client.get("/").text
+    assert client.get("/api/health").json() == {"status": "ok"}

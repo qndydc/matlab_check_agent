@@ -9,16 +9,18 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from threading import RLock
 from typing import Annotated, Callable, Literal, cast
-from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from matlab_refactor_agent.application import AnalysisService
+from matlab_refactor_agent.domain.orchestration import new_job_id
 from matlab_refactor_agent.domain.semantics import SemanticIndex
 from matlab_refactor_agent.infrastructure.config import load_settings
 from matlab_refactor_agent.workers.graph_output import GraphDocument, build_graph_document
@@ -149,7 +151,7 @@ class MvpJobManager:
 
     def submit_analysis(self, project_path: str) -> JobResponse:
         project = Path(project_path).expanduser().resolve()
-        job = _Job(job_id=uuid4().hex, project_path=project)
+        job = _Job(job_id=new_job_id(), project_path=project)
         with self._lock:
             self._jobs[job.job_id] = job
             self._persist(job)
@@ -294,7 +296,28 @@ class MvpJobManager:
         self._store.save(job.stored())
 
 
-def create_app(manager: MvpJobManager | None = None) -> FastAPI:
+def _frontend_directory(configured: Path | None = None) -> Path | None:
+    """定位可选的 Vite 生产构建目录；开发和测试环境允许它不存在。"""
+
+    candidates = [
+        configured,
+        Path(os.environ["MATLAB_REFACTOR_FRONTEND_DIR"])
+        if os.environ.get("MATLAB_REFACTOR_FRONTEND_DIR")
+        else None,
+        Path(__file__).resolve().parents[4] / "frontend" / "dist",
+    ]
+    for candidate in candidates:
+        if candidate is not None:
+            resolved = candidate.expanduser().resolve()
+            if (resolved / "index.html").is_file():
+                return resolved
+    return None
+
+
+def create_app(
+    manager: MvpJobManager | None = None,
+    frontend_dir: Path | None = None,
+) -> FastAPI:
     api = FastAPI(title="MATLAB Refactor Agent Web API", version="0.1.0")
     api.add_middleware(
         CORSMiddleware,
@@ -361,6 +384,15 @@ def create_app(manager: MvpJobManager | None = None) -> FastAPI:
         """作用：删除指定项目的本地图和三级语义快照。"""
 
         jobs.delete_project(job_id)
+
+    static_directory = _frontend_directory(frontend_dir)
+    if static_directory is not None:
+        # 必须最后挂载，确保 /api 路由优先于前端静态文件。
+        api.mount(
+            "/",
+            StaticFiles(directory=static_directory, html=True),
+            name="frontend",
+        )
 
     return api
 

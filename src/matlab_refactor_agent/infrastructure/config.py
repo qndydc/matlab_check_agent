@@ -73,6 +73,7 @@ class LLMSettings(SettingsModel):
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     thinking_mode: str | None = Field(default="enabled", pattern="^(enabled|disabled)$")
     semantic_token_budget: int = Field(default=6000, ge=512)
+    semantic_max_functions_per_unit: int = Field(default=8, ge=1, le=256)
     max_agents: int = Field(default=4, ge=1, le=64)
 
 
@@ -118,6 +119,10 @@ _ENV_FIELDS: dict[str, tuple[str, str]] = {
     "MATLAB_REFACTOR_SEMANTIC_TOKEN_BUDGET": (
         "llm",
         "semantic_token_budget",
+    ),
+    "MATLAB_REFACTOR_SEMANTIC_MAX_FUNCTIONS_PER_UNIT": (
+        "llm",
+        "semantic_max_functions_per_unit",
     ),
     "MATLAB_REFACTOR_MAX_AGENTS": ("llm", "max_agents"),
 }

@@ -9,15 +9,20 @@ from pathlib import Path
 import pytest
 
 from matlab_refactor_agent.domain.enums import WorkerKind
-from matlab_refactor_agent.domain.exceptions import ArtifactError, ConflictError
-from matlab_refactor_agent.domain.models import ScanResult
+from matlab_refactor_agent.domain.exceptions import (
+    ArtifactError,
+    ConflictError,
+    QualityGateError,
+)
+from matlab_refactor_agent.domain.models import AnalysisResult, MatlabFileInfo, ScanResult
+from matlab_refactor_agent.domain.semantics import SemanticWorkUnits
 from matlab_refactor_agent.domain.orchestration import (
     PathClaim,
     TaskEnvelope,
     WorkerResult,
 )
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
-from matlab_refactor_agent.orchestration import ConflictResolver, WorkerPool
+from matlab_refactor_agent.orchestration import ConflictResolver, QualityGate, WorkerPool
 from matlab_refactor_agent.workers.base import BaseWorker, WorkerContext
 
 
@@ -77,3 +82,18 @@ def test_worker_pool_routes_deterministic_stage(tmp_path: Path) -> None:
 
     assert isinstance(outcome, WorkerResult)
     assert outcome.success
+
+
+def test_semantic_preflight_blocks_failed_parser_files(tmp_path: Path) -> None:
+    """作用：验证解析状态为 failed 的文件会在任何语义模型调用前被质量门阻断。"""
+
+    gate = QualityGate(ArtifactStore(tmp_path / "artifacts"))
+    scan = ScanResult(
+        project_root=str(tmp_path),
+        files=[MatlabFileInfo(path="broken.m", parse_status="failed")],
+    )
+    analysis = AnalysisResult(project_root=str(tmp_path))
+    units = SemanticWorkUnits(project_root=str(tmp_path), token_budget=6000)
+
+    with pytest.raises(QualityGateError, match="存在解析失败文件"):
+        gate.validate_semantic_preflight(scan, analysis, units, [])

@@ -14,8 +14,10 @@ from matlab_refactor_agent.domain.models import AnalysisResult
 from matlab_refactor_agent.domain.semantics import (
     ClusterAnnotationResponse,
     FileAnnotation,
+    FileAnnotationDraft,
     FunctionAnnotation,
     ProjectAnnotation,
+    ProjectAnnotationDraft,
     SemanticConflict,
     SemanticIndex,
 )
@@ -24,6 +26,7 @@ from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
 FILE_SYSTEM_PROMPT = (
     "你是 MATLAB 文件语义聚合 Agent。根据同一文件内的函数注解，概括该文件在项目中的职责。"
     "role 和 risks 必须使用中文；函数名和 MATLAB 专有名词可以保留原文。"
+    "只生成 role、risks 和 confidence；不要判断或返回 file_path 与 function_symbols。"
     "不得添加输入中没有依据的功能。"
 )
 
@@ -31,6 +34,7 @@ PROJECT_SYSTEM_PROMPT = (
     "你是 MATLAB 项目语义聚合 Agent。根据文件级语义、入口点和依赖图摘要，生成项目级说明。"
     "purpose 必须清楚描述项目用来做什么；usage 必须说明用户如何使用该项目，包括合理的入口或调用顺序。"
     "purpose、usage 和 risks 必须使用中文；函数名、文件名和 MATLAB 专有名词可以保留原文。"
+    "只生成 purpose、usage、risks 和 confidence；不要判断或返回 entry_points 与 files。"
     "无法从上下文确认的使用步骤必须明确标为待确认，不得臆测。"
 )
 
@@ -123,7 +127,7 @@ class SemanticAnnotationAggregator:
         for file_path in sorted(by_file):
             items = sorted(by_file[file_path], key=lambda item: item.symbol_id)
             expected_symbols = [item.symbol_id for item in items]
-            response = self._client.complete(
+            draft = self._client.complete(
                 system_prompt=FILE_SYSTEM_PROMPT,
                 user_prompt=json.dumps(
                     {
@@ -136,17 +140,17 @@ class SemanticAnnotationAggregator:
                     ensure_ascii=False,
                     indent=2,
                 ),
-                response_model=FileAnnotation,
+                response_model=FileAnnotationDraft,
             )
-            if response.file_path != file_path:
-                raise OrchestrationError(
-                    f"文件级语义返回了错误路径: {response.file_path} != {file_path}"
+            files.append(
+                FileAnnotation(
+                    file_path=file_path,
+                    role=draft.role,
+                    function_symbols=expected_symbols,
+                    risks=draft.risks,
+                    confidence=draft.confidence,
                 )
-            if sorted(response.function_symbols) != expected_symbols:
-                raise OrchestrationError(
-                    f"文件级语义返回了错误函数集合: {file_path}"
-                )
-            files.append(response)
+            )
         return files
 
     def _project_annotation(
@@ -157,7 +161,7 @@ class SemanticAnnotationAggregator:
         """作用：根据文件语义和调用图摘要生成项目用途与使用方法。"""
 
         expected_files = [item.file_path for item in files]
-        response = self._client.complete(
+        draft = self._client.complete(
             system_prompt=PROJECT_SYSTEM_PROMPT,
             user_prompt=json.dumps(
                 {
@@ -170,12 +174,15 @@ class SemanticAnnotationAggregator:
                 ensure_ascii=False,
                 indent=2,
             ),
-            response_model=ProjectAnnotation,
+            response_model=ProjectAnnotationDraft,
         )
-        if response.entry_points != analysis.entry_points:
-            raise OrchestrationError("项目级语义修改了确定性入口点")
-        if sorted(response.files) != expected_files:
-            raise OrchestrationError("项目级语义返回了错误文件集合")
-        if not response.usage.strip():
+        if not draft.usage.strip():
             raise OrchestrationError("项目级语义缺少使用方法")
-        return response
+        return ProjectAnnotation(
+            purpose=draft.purpose,
+            usage=draft.usage,
+            entry_points=analysis.entry_points,
+            files=expected_files,
+            risks=draft.risks,
+            confidence=draft.confidence,
+        )

@@ -165,7 +165,7 @@ def _entry_points( #确认入口点 程序通常从哪里开始执行 （手工�
     by_simple: dict[str, list[str]],
     by_file_simple: dict[tuple[str, str], list[str]],
 ) -> list[str]:
-    """作用：确定入口点；输入：调用图、配置和名称索引；输出：入口节点列表；数据流：手工名称解析或零入度检测 -> 排序。"""
+    """作用：确定入口候选；输入：调用图、配置和名称索引；输出：main 优先的公开顶层节点列表。"""
 
     if configured:
         resolved = {
@@ -179,4 +179,23 @@ def _entry_points( #确认入口点 程序通常从哪里开始执行 （手工�
             is not None
         }
         return sorted(resolved)
-    return sorted(node for node in graph if graph.in_degree(node) == 0)
+    public_top_level = [
+        node
+        for node in graph
+        if ">" not in node
+        and "private" not in {
+            part.casefold()
+            for part in by_qualified[node].file_path.replace("\\", "/").split("/")
+        }
+    ]
+    main_candidates = sorted(
+        node
+        for node in public_top_level
+        if by_qualified[node].name.casefold() == "main"
+    )
+    zero_indegree = sorted(
+        node
+        for node in public_top_level
+        if graph.in_degree(node) == 0 and node not in main_candidates
+    )
+    return [*main_candidates, *zero_indegree]

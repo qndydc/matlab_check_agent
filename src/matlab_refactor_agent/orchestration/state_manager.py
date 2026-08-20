@@ -124,6 +124,17 @@ class SQLiteStateManager:
             ).fetchone()
         return JobRecord.model_validate(dict(row)) if row is not None else None
 
+    def jobs_for_project(self, project_root: str) -> list[JobRecord]:
+        """作用：按最近更新时间查询项目 Job；输入：规范化项目路径；输出：候选 checkpoint 所属 Job。"""
+
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE project_root = ? "
+                "ORDER BY updated_at DESC, created_at DESC",
+                (project_root,),
+            ).fetchall()
+        return [JobRecord.model_validate(dict(row)) for row in rows]
+
     def task_statuses(self, job_id: str) -> list[tuple[str, str, str]]:
         """作用：查询 Job 下任务状态；输入：Job ID；输出：任务/Worker/状态元组；数据流：SQLite rows -> 状态报告。"""
 
@@ -164,6 +175,8 @@ class SQLiteStateManager:
                     FOREIGN KEY(job_id) REFERENCES jobs(job_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_tasks_job ON tasks(job_id);
+                CREATE INDEX IF NOT EXISTS idx_jobs_project_updated
+                    ON jobs(project_root, updated_at DESC);
                 """
             )
 

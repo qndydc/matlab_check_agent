@@ -7,6 +7,7 @@ htmlcov/
 .venv/
 venv/
 .env
+.env.docker.local
 dist/
 build/
 node_modules/
@@ -15,3 +16,4 @@ var/
 .idea/
 .vscode/
 tests/fixtures/matlab_projects/matlab2tikz-master/
+projects/

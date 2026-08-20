@@ -66,6 +66,34 @@ def test_configured_entry_point_overrides_detection() -> None:
     assert result.entry_points == ["second"]
 
 
+def test_detected_entries_prioritize_main_and_exclude_internal_nodes() -> None:
+    """作用：验证 main 优先且局部/private 函数不成为自动入口候选。"""
+
+    functions = [
+        _function("alpha", []),
+        _function("main", ["worker"]),
+        _function("worker", []),
+        FunctionInfo(
+            name="helper",
+            qualified_name="main>helper",
+            file_path="main.m",
+        ),
+        FunctionInfo(
+            name="secret",
+            qualified_name="secret",
+            file_path="private/secret.m",
+        ),
+    ]
+    scan = ScanResult(
+        project_root="/project",
+        files=[MatlabFileInfo(path="all.m", functions=functions)],
+    )
+
+    result = DependencyAnalyzer().analyze(scan)
+
+    assert result.entry_points == ["main", "alpha"]
+
+
 def test_local_call_resolves_within_callers_file() -> None:
     """作用：验证同名局部函数消歧；输入：跨文件同名节点；输出：断言结果；数据流：调用名 -> 文件作用域索引 -> 唯一边。"""
 
