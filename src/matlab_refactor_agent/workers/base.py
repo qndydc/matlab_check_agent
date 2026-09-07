@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
@@ -32,3 +33,14 @@ class BaseWorker(ABC):
     @abstractmethod
     def execute(self, task: TaskEnvelope, context: WorkerContext) -> WorkerResult:
         """作用：执行一个幂等任务；输入：任务与运行上下文；输出：WorkerResult；数据流：payload/artifact -> 能力实现 -> 新 artifact 引用。"""
+
+    def validate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """校验调用参数；生产 Worker 应覆盖，测试 Worker 保持轻量兼容。"""
+
+        return dict(payload)
+
+    @property
+    def risk_level(self) -> str:
+        """确定性 Worker 只读取输入项目并写入隔离 artifact。"""
+
+        return "write_artifact"

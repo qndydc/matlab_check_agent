@@ -1,23 +1,25 @@
 """
-Description: 导出 Agent 基础契约和已实现的专责 Agent。
-References: agents.base、semantic_annotation、module_responsibility、naming_directory、repair、natural_language_report。
-Referenced By: LangGraphWorkflow 和外部 Agent 扩展。
+Description: 只导出需要观察反馈与决策循环的 MATLAB 到 Python Agent。
+References: agents.base、matlab_to_python；语义注释已迁至 semantics。
+Referenced By: MainWorkflow 和外部 Agent 扩展。
 """
 
 from .base import AgentContext, BaseAgent
-from .module_responsibility import ModuleResponsibilityAgent
-from .naming_directory import NamingDirectoryAgent
-from .natural_language_report import NaturalLanguageReportAgent
-from .repair import RepairAgent
-from .semantic_annotation import SemanticAnnotationAgent
+from .matlab_to_python import (
+    ConversionReasonAgent,
+    MatlabToPythonAgent,
+    MatlabToPythonRepairAgent,
+    MigrationPlanBuilder,
+    TranslationContextBuilder,
+)
 
 
 __all__ = [
     "AgentContext",
     "BaseAgent",
-    "ModuleResponsibilityAgent",
-    "NamingDirectoryAgent",
-    "NaturalLanguageReportAgent",
-    "RepairAgent",
-    "SemanticAnnotationAgent",
+    "ConversionReasonAgent",
+    "MatlabToPythonAgent",
+    "MatlabToPythonRepairAgent",
+    "MigrationPlanBuilder",
+    "TranslationContextBuilder",
 ]

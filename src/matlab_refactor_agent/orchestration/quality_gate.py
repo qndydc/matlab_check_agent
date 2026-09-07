@@ -48,7 +48,7 @@ class QualityGate:
 
         reference = result.artifacts.get("file_manifest")
         if reference is None:
-            raise QualityGateError("ScannerAgent 缺少 file_manifest artifact")
+            raise QualityGateError("ScannerWorker 缺少 file_manifest artifact")
         manifest = self._artifacts.read_model(reference, MatlabFileManifest)
         if len(manifest.files) != len(set(manifest.files)):
             raise QualityGateError("文件清单包含重复路径")
@@ -65,7 +65,7 @@ class QualityGate:
             chunk_index = int(task.payload["chunk_index"])
             reference = result.artifacts.get(f"parse_chunk_{chunk_index}")
             if reference is None:
-                raise QualityGateError("ParserAgent 缺少分片 artifact")
+                raise QualityGateError("ParserWorker 缺少分片 artifact")
             chunk = self._artifacts.read_model(reference, ParseChunkResult)
             paths = [item.path for item in chunk.files]
             requested = [str(item) for item in task.payload.get("files", [])]
@@ -77,7 +77,7 @@ class QualityGate:
         if operation == "aggregate":
             reference = result.artifacts.get("scan_result")
             if reference is None:
-                raise QualityGateError("ParserAgent 聚合缺少 scan_result artifact")
+                raise QualityGateError("ParserWorker 聚合缺少 scan_result artifact")
             scan = self._artifacts.read_model(reference, ScanResult)
             paths = [item.path for item in scan.files]
             if len(paths) != len(set(paths)) or paths != sorted(paths):
@@ -90,7 +90,7 @@ class QualityGate:
 
         reference = result.artifacts.get("analysis_result")
         if reference is None:
-            raise QualityGateError("AnalyzerAgent 缺少 analysis_result artifact")
+            raise QualityGateError("AnalyzerWorker 缺少 analysis_result artifact")
         analysis = self._artifacts.read_model(reference, AnalysisResult)
         node_ids = [item.qualified_name for item in analysis.functions]
         if len(node_ids) != len(set(node_ids)):
@@ -164,10 +164,11 @@ class QualityGate:
                     f"语义簇分组与最终提示估算不一致: {unit.unit_id} "
                     f"({unit.estimated_tokens} != {context.estimated_tokens})"
                 )
-            if context.estimated_tokens > work_units.token_budget:
+            if context.estimated_tokens > work_units.hard_token_limit:
                 errors.append(
-                    f"语义簇上下文超出预算: {unit.unit_id} "
-                    f"({context.estimated_tokens} > {work_units.token_budget})"
+                    f"语义簇上下文超过模型安全输入上限: {unit.unit_id} "
+                    f"({context.estimated_tokens} > "
+                    f"{work_units.hard_token_limit})"
                 )
             empty_sources = [
                 item.symbol_id for item in context.functions if not item.source.strip()

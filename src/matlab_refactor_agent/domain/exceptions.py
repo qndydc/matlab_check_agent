@@ -24,11 +24,28 @@ class OrchestrationError(MatlabRefactorError):
     """作用：报告调度流水线失败；输入：任务或 Worker 错误；输出：业务异常；数据流：Orchestrator -> CLI。"""
 
 
-class WorkerNotFoundError(OrchestrationError):
+class CallLifecycleError(OrchestrationError):
+    """携带统一错误类型和重试语义的模型/工具调用异常。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "unknown",
+        retryable: bool = False,
+        observation=None,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.observation = observation
+
+
+class WorkerNotFoundError(CallLifecycleError):
     """作用：报告 Worker 未注册；输入：Worker 类型；输出：调度异常；数据流：WorkerPool -> Orchestrator。"""
 
 
-class LLMClientError(OrchestrationError):
+class LLMClientError(CallLifecycleError):
     """作用：报告 LLM 请求、空响应或结构化校验失败；输入：SDK/响应错误；输出：不泄露密钥的业务异常。"""
 
 
@@ -42,11 +59,3 @@ class QualityGateError(OrchestrationError):
 
 class ArtifactError(OrchestrationError):
     """作用：报告 artifact 读写或路径越界；输入：artifact 操作错误；输出：调度异常；数据流：ArtifactStore -> Worker/Orchestrator。"""
-
-
-class ConflictError(OrchestrationError):
-    """作用：报告多个任务的资源声明冲突；输入：冲突路径和任务；输出：调度异常；数据流：ConflictResolver -> Orchestrator。"""
-
-
-class ChangeSetExecutionError(OrchestrationError):
-    """作用：报告隔离复制、路径改写或源树完整性失败；输入：执行错误；输出：安全中止。"""

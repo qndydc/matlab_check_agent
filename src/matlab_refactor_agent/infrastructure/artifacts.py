@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import RLock
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -15,6 +16,8 @@ from pydantic import BaseModel
 from matlab_refactor_agent.domain.exceptions import ArtifactError
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+# Web 读取和 Worker 原子替换共用进程锁，避免 Windows 文件共享冲突。
+_ARTIFACT_IO_LOCK = RLock()
 
 
 class ArtifactStore:
@@ -29,20 +32,17 @@ class ArtifactStore:
     def write_model(self, job_id: str, name: str, model: BaseModel) -> str:
         """作用：持久化 Pydantic 模型；输入：Job ID、名称和模型；输出：artifact 引用；数据流：模型 -> JSON -> Job 隔离文件。"""
 
-        path = self._job_path(job_id, name)
         payload = json.dumps(model.model_dump(mode="json"), ensure_ascii=False, indent=2)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(payload + "\n", encoding="utf-8")
-        temporary.replace(path)
-        return str(path)
+        return self.write_text(job_id, name, payload + "\n")
 
     def write_text(self, job_id: str, name: str, content: str) -> str:
         """作用：原子写入非 JSON 报告；输入：Job ID、文件名和文本；输出：安全 artifact 引用。"""
 
-        path = self._job_path(job_id, name)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
+        with _ARTIFACT_IO_LOCK:
+            path = self._job_path(job_id, name)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(content, encoding="utf-8")
+            temporary.replace(path)
         return str(path)
 
     def read_model(self, reference: str, model_type: type[ModelT]) -> ModelT:
@@ -50,7 +50,9 @@ class ArtifactStore:
 
         path = self._resolve_reference(reference)
         try:
-            return model_type.model_validate_json(path.read_text(encoding="utf-8"))
+            with _ARTIFACT_IO_LOCK:
+                content = path.read_text(encoding="utf-8")
+            return model_type.model_validate_json(content)
         except (OSError, ValueError) as exc:
             raise ArtifactError(f"无法读取 artifact {path}: {exc}") from exc
 
@@ -59,9 +61,21 @@ class ArtifactStore:
 
         path = self._resolve_reference(reference)
         try:
-            return path.read_text(encoding="utf-8")
+            with _ARTIFACT_IO_LOCK:
+                return path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ArtifactError(f"无法读取 artifact {path}: {exc}") from exc
+
+    def reference(self, job_id: str, name: str) -> str:
+        """返回既有 Job artifact 引用，不创建目录或文件。"""
+
+        if not job_id.isalnum() or Path(name).name != name:
+            raise ArtifactError("artifact 的 job_id 或名称不安全")
+        path = (self.root / job_id / name).resolve()
+        self._assert_within_root(path)
+        if not path.is_file():
+            raise ArtifactError(f"artifact 不存在: {path}")
+        return str(path)
 
     def _job_path(self, job_id: str, name: str) -> Path:
         """作用：构造 Job 隔离路径；输入：Job ID 和文件名；输出：安全绝对路径；数据流：标识清理 -> 边界检查 -> 目录创建。"""

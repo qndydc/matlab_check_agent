@@ -1,0 +1,13 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "files": [
+    "+utils/normalize.m",
+    "cycleA.m",
+    "cycleB.m",
+    "loadValues.m",
+    "main.m",
+    "orphan.m",
+    "processData.m"
+  ],
+  "excluded_count": 1
+}

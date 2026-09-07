@@ -1,0 +1,210 @@
+{
+  "schema_version": "1.0",
+  "directed": true,
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "nodes": [
+    {
+      "id": "cycleA",
+      "label": "cycleA",
+      "qualified_name": "cycleA",
+      "kind": "function",
+      "file_path": "cycleA.m",
+      "start_line": 1,
+      "end_line": 3,
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "cycleB",
+      "label": "cycleB",
+      "qualified_name": "cycleB",
+      "kind": "function",
+      "file_path": "cycleB.m",
+      "start_line": 1,
+      "end_line": 3,
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "loadValues",
+      "label": "loadValues",
+      "qualified_name": "loadValues",
+      "kind": "function",
+      "file_path": "loadValues.m",
+      "start_line": 1,
+      "end_line": 4,
+      "inputs": [],
+      "outputs": [
+        "values"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "main",
+      "label": "main",
+      "qualified_name": "main",
+      "kind": "script",
+      "file_path": "main.m",
+      "start_line": 1,
+      "end_line": 5,
+      "inputs": [],
+      "outputs": [],
+      "is_entry_point": true,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "orphan",
+      "label": "orphan",
+      "qualified_name": "orphan",
+      "kind": "function",
+      "file_path": "orphan.m",
+      "start_line": 1,
+      "end_line": 3,
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "is_entry_point": true,
+      "is_core": false,
+      "is_orphan": true
+    },
+    {
+      "id": "processData",
+      "label": "processData",
+      "qualified_name": "processData",
+      "kind": "function",
+      "file_path": "processData.m",
+      "start_line": 1,
+      "end_line": 5,
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "processData>helper",
+      "label": "helper",
+      "qualified_name": "processData>helper",
+      "kind": "function",
+      "file_path": "processData.m",
+      "start_line": 7,
+      "end_line": 9,
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "total"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "utils.normalize",
+      "label": "normalize",
+      "qualified_name": "utils.normalize",
+      "kind": "function",
+      "file_path": "+utils/normalize.m",
+      "start_line": 1,
+      "end_line": 4,
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "e0",
+      "source": "cycleA",
+      "target": "cycleB",
+      "is_cycle": true
+    },
+    {
+      "id": "e1",
+      "source": "cycleB",
+      "target": "cycleA",
+      "is_cycle": true
+    },
+    {
+      "id": "e2",
+      "source": "main",
+      "target": "loadValues",
+      "is_cycle": false
+    },
+    {
+      "id": "e3",
+      "source": "main",
+      "target": "processData",
+      "is_cycle": false
+    },
+    {
+      "id": "e4",
+      "source": "processData",
+      "target": "processData>helper",
+      "is_cycle": false
+    },
+    {
+      "id": "e5",
+      "source": "processData",
+      "target": "utils.normalize",
+      "is_cycle": false
+    }
+  ],
+  "entry_points": [
+    "main",
+    "orphan"
+  ],
+  "cycle_clusters": [
+    [
+      "cycleA",
+      "cycleB"
+    ]
+  ],
+  "cycles": [
+    [
+      "cycleA",
+      "cycleB"
+    ]
+  ],
+  "unresolved_calls": {
+    "utils.normalize": [
+      "max"
+    ],
+    "main": [
+      "disp"
+    ],
+    "processData>helper": [
+      "sum"
+    ]
+  }
+}

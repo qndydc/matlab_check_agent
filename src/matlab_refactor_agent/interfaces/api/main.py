@@ -1,19 +1,10 @@
 """
-Description: Start the local MATLAB analysis FastAPI server.
-References: interfaces.api.app and uvicorn.
-Referenced By: matlab-refactor-web console script.
+Description: 保留旧语义后端启动入口。
+References: apps.semantic.backend.main。
+Referenced By: matlab-refactor-web 兼容命令。
 """
 
-import uvicorn
-
-
-def main() -> None:
-    uvicorn.run(
-        "matlab_refactor_agent.interfaces.api.app:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=False,
-    )
+from matlab_refactor_agent.apps.semantic.backend.main import main
 
 
 if __name__ == "__main__":

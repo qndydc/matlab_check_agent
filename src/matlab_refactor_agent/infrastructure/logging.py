@@ -12,5 +12,11 @@ def configure_logging(level: str = "INFO") -> None:
 
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
     )
+    # 默认保留阶段与错误，HTTP 轮询和 SDK 请求细节只在 DEBUG 时输出。
+    for name in ("httpx", "httpcore", "openai"):
+        logging.getLogger(name).setLevel(
+            logging.DEBUG if level.upper() == "DEBUG" else logging.WARNING
+        )

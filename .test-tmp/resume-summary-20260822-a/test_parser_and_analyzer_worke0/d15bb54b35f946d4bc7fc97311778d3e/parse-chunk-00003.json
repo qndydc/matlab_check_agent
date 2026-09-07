@@ -1,0 +1,56 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "chunk_index": 3,
+  "files": [
+    {
+      "path": "processData.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "processData",
+          "qualified_name": "processData",
+          "file_path": "processData.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "output"
+          ],
+          "calls": [
+            "helper",
+            "utils.normalize"
+          ],
+          "called_by": [],
+          "line_count": 5,
+          "start_line": 1,
+          "end_line": 5
+        },
+        {
+          "name": "helper",
+          "qualified_name": "processData>helper",
+          "file_path": "processData.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "total"
+          ],
+          "calls": [
+            "sum"
+          ],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 7,
+          "end_line": 9
+        }
+      ],
+      "line_count": 10,
+      "parse_status": "parsed",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

@@ -33,14 +33,11 @@ class WorkerKind(StrEnum):
 
 
 class AgentKind(StrEnum):
-    """作用：标识语义理解后的专责 Agent；输入：Agent 阶段；输出：稳定 LangGraph 节点角色。"""
+    """作用：标识真正执行迁移决策的 Agent；语义值仅保留 0.1 兼容。"""
 
+    # 已弃用：生产语义流水线使用 SemanticAnnotationRequest。
     SEMANTIC_ANNOTATION = "semantic_annotation"
-    MODULE_RESPONSIBILITY = "module_responsibility"
-    NAMING_DIRECTORY = "naming_directory"
-    VALIDATION = "validation"
-    REPAIR = "repair"
-    REPORT = "report"
+    MATLAB_TO_PYTHON = "matlab_to_python"
 
 
 class JobStatus(StrEnum):
@@ -50,14 +47,10 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-    WAITING_APPROVAL = "waiting_approval"
-    REJECTED = "rejected"
-    CHANGES_REQUESTED = "changes_requested"
-    VALIDATION_FAILED = "validation_failed"
 
 
 class TaskStatus(StrEnum):
-    """作用：标识单任务生命周期；输入：LangGraph 节点内 Worker 执行事件；输出：任务状态。"""
+    """作用：标识主 Workflow 内单任务生命周期。"""
 
     PENDING = "pending"
     RUNNING = "running"

@@ -1,0 +1,144 @@
+{
+  "unit_id": "cluster-0001-835072e196",
+  "annotations": [
+    {
+      "symbol_id": "loadValues",
+      "file_path": "loadValues.m",
+      "start_line": 1,
+      "end_line": 4,
+      "summary": "分析 loadValues 的 MATLAB 逻辑",
+      "inputs": [],
+      "outputs": [
+        "values"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "loadValues.m",
+          "start_line": 1,
+          "end_line": 4,
+          "source_hash": "0a9c8219263d609bab7e571ccc376a92c8208b74815acb5d6526318bcab1447a"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    },
+    {
+      "symbol_id": "main",
+      "file_path": "main.m",
+      "start_line": 1,
+      "end_line": 5,
+      "summary": "分析 main 的 MATLAB 逻辑",
+      "inputs": [],
+      "outputs": [],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "main.m",
+          "start_line": 1,
+          "end_line": 5,
+          "source_hash": "68c726d67b22342bc35b774eaa9392c5b08ee09ea62fed5bd7d535a9a14cc147"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    },
+    {
+      "symbol_id": "processData",
+      "file_path": "processData.m",
+      "start_line": 1,
+      "end_line": 5,
+      "summary": "分析 processData 的 MATLAB 逻辑",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "processData.m",
+          "start_line": 1,
+          "end_line": 5,
+          "source_hash": "ce4c85aed5f7bad7b69525ac2fdbfe9730f1272710d274810e35c50d38b4003f"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": true
+    },
+    {
+      "symbol_id": "processData>helper",
+      "file_path": "processData.m",
+      "start_line": 7,
+      "end_line": 9,
+      "summary": "分析 processData>helper 的 MATLAB 逻辑",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "total"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "processData.m",
+          "start_line": 7,
+          "end_line": 9,
+          "source_hash": "7dcdf0b1307d7d3ce5a108542fc347a17ba5f8532027079043c9622a3337039a"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    },
+    {
+      "symbol_id": "utils.normalize",
+      "file_path": "+utils/normalize.m",
+      "start_line": 1,
+      "end_line": 4,
+      "summary": "分析 utils.normalize 的 MATLAB 逻辑",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "+utils/normalize.m",
+          "start_line": 1,
+          "end_line": 4,
+          "source_hash": "1202d5392c769a657550caa1f8f959c974b0355eaa817c5e0163de8d3b922eee"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    }
+  ]
+}

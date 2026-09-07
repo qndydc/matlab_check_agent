@@ -1,0 +1,63 @@
+{
+  "unit_id": "cluster-0000-11b8b36ada",
+  "annotations": [
+    {
+      "symbol_id": "cycleA",
+      "file_path": "cycleA.m",
+      "start_line": 1,
+      "end_line": 3,
+      "summary": "分析 cycleA 的 MATLAB 逻辑",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "cycleA.m",
+          "start_line": 1,
+          "end_line": 3,
+          "source_hash": "cd51dddba5cae65a5e936693edee504a57d29884cf3c8a9f1eb28003daa6e105"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    },
+    {
+      "symbol_id": "cycleB",
+      "file_path": "cycleB.m",
+      "start_line": 1,
+      "end_line": 3,
+      "summary": "分析 cycleB 的 MATLAB 逻辑",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "cycleB.m",
+          "start_line": 1,
+          "end_line": 3,
+          "source_hash": "25f14f141befb5fd8ddec3cee617d0a67bb04ac10b7276a455acacf2f18cc6c7"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    }
+  ]
+}

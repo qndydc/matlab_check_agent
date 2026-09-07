@@ -1,7 +1,7 @@
 """
 Description: 以 Tree-sitter AST 为事实源解析 MATLAB，语法树失败时才使用正则降级。
 References: maxx.treesitter、domain.models、Tree-sitter Node。
-Referenced By: MatlabProjectScanner、ParserAgent 和解析器测试。
+Referenced By: MatlabProjectScanner、ParserWorker 和解析器测试。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from matlab_refactor_agent.domain.enums import MatlabObjectKind, ParseStatus
 from matlab_refactor_agent.domain.exceptions import ParserUnavailableError
 from matlab_refactor_agent.domain.models import FunctionInfo, MatlabFileInfo, relative_posix
+from matlab_refactor_agent.workers.matlab_source import read_matlab_source
 
 # 以下正则只服务于 AST 解析失败后的保守降级路径。
 _FUNCTION_RE = re.compile(
@@ -90,12 +91,7 @@ class MaxxMatlabParser:
 
 
 def _read_matlab_source(path: Path) -> str:
-    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
-        try:
-            return path.read_text(encoding=encoding)
-        except UnicodeDecodeError:
-            continue
-    return path.read_text(encoding="utf-8", errors="replace")
+    return read_matlab_source(path)
 
 
 def _walk(node: Any, *, stop_at_functions: bool = False) -> Iterable[Any]:

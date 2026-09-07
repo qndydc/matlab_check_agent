@@ -1,0 +1,16 @@
+{
+  "unit_id": "migration-11b8b36ada",
+  "files": [
+    {
+      "path": "src/basic/migration-11b8b36ada.py",
+      "content": "\"\"\"Generated test module.\"\"\"\n",
+      "symbol_ids": [
+        "cycleA",
+        "cycleB"
+      ]
+    }
+  ],
+  "assumptions": [],
+  "manual_review": [],
+  "confidence": 0.8
+}

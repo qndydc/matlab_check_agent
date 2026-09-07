@@ -1,0 +1,15 @@
+{
+  "unit_id": "migration-8168dbc828",
+  "files": [
+    {
+      "path": "src/basic/migration-8168dbc828.py",
+      "content": "\"\"\"Generated test module.\"\"\"\n",
+      "symbol_ids": [
+        "utils.normalize"
+      ]
+    }
+  ],
+  "assumptions": [],
+  "manual_review": [],
+  "confidence": 0.8
+}

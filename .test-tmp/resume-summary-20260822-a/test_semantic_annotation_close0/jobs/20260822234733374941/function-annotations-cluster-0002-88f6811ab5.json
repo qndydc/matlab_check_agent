@@ -1,0 +1,34 @@
+{
+  "unit_id": "cluster-0002-88f6811ab5",
+  "annotations": [
+    {
+      "symbol_id": "orphan",
+      "file_path": "orphan.m",
+      "start_line": 1,
+      "end_line": 3,
+      "summary": "分析 orphan 的 MATLAB 逻辑",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "data_flow": [
+        "输入经计算形成输出"
+      ],
+      "side_effects": [],
+      "risks": [],
+      "open_questions": [],
+      "evidence": [
+        {
+          "file_path": "orphan.m",
+          "start_line": 1,
+          "end_line": 3,
+          "source_hash": "29b151b4ed96d88db2268b16b970244a424d0905f2658904c7ad89009dcc7315"
+        }
+      ],
+      "confidence": 0.9,
+      "is_algorithm_core": false
+    }
+  ]
+}

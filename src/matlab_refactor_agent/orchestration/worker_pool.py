@@ -6,9 +6,15 @@ Referenced By: Orchestrator 和后续并发调度实现。
 
 from __future__ import annotations
 
+from time import monotonic
+
 from matlab_refactor_agent.domain.exceptions import WorkerNotFoundError
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.workers.base import BaseWorker, WorkerContext
+from matlab_refactor_agent.orchestration.call_lifecycle import (
+    CallLifecycle,
+    CallObservationRecorder,
+)
 
 
 class WorkerPool:
@@ -19,6 +25,7 @@ class WorkerPool:
 
         self._workers: dict[str, BaseWorker] = {}
         self.max_workers = max_workers
+        self._lifecycle = CallLifecycle(max_concurrent_calls=max_workers)
 
     def register(self, worker: BaseWorker) -> None:
         """作用：注册或替换 Worker；输入：BaseWorker；输出：无；数据流：worker.kind -> 生命周期注册表。"""
@@ -30,8 +37,32 @@ class WorkerPool:
 
         worker = self._workers.get(str(task.worker_kind))
         if worker is None:
-            raise WorkerNotFoundError(f"未注册 Worker: {task.worker_kind}")
-        return worker.execute(task, context)
+            observation = self._lifecycle.observe(
+                tool=f"worker.{task.worker_kind}", status="failure",
+                result=f"未注册 Worker: {task.worker_kind}",
+                error_type="tool_not_found", retryable=False, attempt=1,
+                started_at=monotonic(), next_action="stop",
+                sink=CallObservationRecorder(context.artifact_store, task.job_id),
+            )
+            raise WorkerNotFoundError(
+                f"未注册 Worker: {task.worker_kind}",
+                error_type="tool_not_found", retryable=False,
+                observation=observation,
+            )
+        recorder = CallObservationRecorder(context.artifact_store, task.job_id)
+        return self._lifecycle.invoke(
+            tool=f"worker.{task.worker_kind}",
+            arguments=task.payload,
+            argument_validator=worker.validate_payload,
+            operation=lambda payload: worker.execute(
+                task.model_copy(update={"payload": payload}), context,
+            ),
+            risk=worker.risk_level,
+            summarize=lambda result: (
+                f"success={result.success}, artifacts={sorted(result.artifacts)}"
+            ),
+            sink=recorder,
+        )
 
     def registered_kinds(self) -> list[str]:
         """作用：列出可用 Worker；输入：注册表；输出：排序类型列表；数据流：注册表 keys -> 状态/诊断。"""

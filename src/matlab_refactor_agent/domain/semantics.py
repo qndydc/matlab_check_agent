@@ -1,10 +1,13 @@
 """
 Description: 定义语义工作单元、有限源码上下文和函数/文件/项目三级注解。
 References: Pydantic、domain.models。
-Referenced By: SemanticAnnotationAgent、上下文构建器、聚合器和语义流水线。
+Referenced By: ClusterSemanticAnnotator、上下文构建器、聚合器和语义流水线。
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import Field
 
@@ -33,7 +36,85 @@ class SemanticWorkUnits(DomainModel):
 
     project_root: str
     token_budget: int = Field(gt=0)
+    hard_token_limit: int = Field(default=1_000_000, gt=0)
     units: list[SemanticWorkUnit] = Field(default_factory=list)
+
+
+class SemanticPreparationBundle(DomainModel):
+    """连接确定性准备阶段和语义图，只传递不可变 artifact 引用。"""
+
+    job_id: str
+    project_root: str
+    scan_reference: str
+    analysis_reference: str
+    code_tree_reference: str
+    work_units_reference: str
+    token_budget: int = Field(gt=0)
+    hard_token_limit: int = Field(default=1_000_000, gt=0)
+
+
+class SemanticAnnotationRequest(DomainModel):
+    """语义流水线内部的强类型请求，不使用通用 Agent 协议。"""
+
+    job_id: str
+    scan_reference: str
+    analysis_reference: str
+    unit: SemanticWorkUnit
+    token_budget: int = Field(gt=0)
+    hard_token_limit: int = Field(default=1_000_000, gt=0)
+    attempt: int = Field(default=1, ge=1)
+    quality_feedback: list[str] = Field(default_factory=list)
+    previous_annotation_reference: str | None = None
+
+
+class SemanticUnitQuality(DomainModel):
+    """记录一次函数簇注释后的确定性质量判断。"""
+
+    unit_id: str
+    attempt: int = Field(ge=1)
+    status: Literal["accepted", "low_quality", "incomplete", "manual_review"]
+    reasons: list[str] = Field(default_factory=list)
+    annotation_reference: str | None = None
+
+
+class SemanticQualityReport(DomainModel):
+    """汇总语义图中全部簇的最终状态和尝试历史。"""
+
+    units: list[SemanticUnitQuality] = Field(default_factory=list)
+    accepted_unit_ids: list[str] = Field(default_factory=list)
+    low_quality_unit_ids: list[str] = Field(default_factory=list)
+    incomplete_unit_ids: list[str] = Field(default_factory=list)
+    manual_review_unit_ids: list[str] = Field(default_factory=list)
+
+
+class SemanticProgressEvent(DomainModel):
+    """描述 LangGraph 一个可供外部增量监控的节点事件。"""
+
+    job_id: str
+    sequence: int = Field(ge=1)
+    node: Literal[
+        "initialize", "select_unit", "annotate", "quality_check", "aggregate"
+    ]
+    phase: Literal[
+        "started", "completed", "retrying", "manual_review", "failed"
+    ]
+    message: str
+    unit_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
+    quality_status: Literal[
+        "accepted", "low_quality", "incomplete", "manual_review"
+    ] | None = None
+    details: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
+class SemanticProgressLog(DomainModel):
+    """持久化一次语义图运行产生的完整有序事件。"""
+
+    job_id: str
+    events: list[SemanticProgressEvent] = Field(default_factory=list)
 
 
 class NeighborSummary(DomainModel):
@@ -68,8 +149,8 @@ class SemanticClusterContext(DomainModel):
     estimated_tokens: int = Field(ge=0)
 
 
-class FunctionAnnotation(DomainModel):
-    """作用：描述函数用途、数据流、风险和证据；输入：结构化 LLM 响应；输出：语义索引函数节点。"""
+class FunctionAnnotationDraft(DomainModel):
+    """作用：承载 LLM 生成的函数语义；输入：结构化响应；输出：待绑定本地证据的注解草稿。"""
 
     symbol_id: str
     file_path: str
@@ -82,13 +163,25 @@ class FunctionAnnotation(DomainModel):
     side_effects: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
-    evidence: list[SourceEvidence] = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
     is_algorithm_core: bool = False
 
 
+class FunctionAnnotation(FunctionAnnotationDraft):
+    """作用：描述带本地可信证据的函数语义；输入：注解草稿与源码上下文；输出：语义索引函数节点。"""
+
+    evidence: list[SourceEvidence] = Field(min_length=1)
+
+
+class ClusterAnnotationDraftResponse(DomainModel):
+    """作用：约束单函数簇的 LLM 响应；输入：模型 JSON；输出：不含本地证据的注解草稿。"""
+
+    unit_id: str
+    annotations: list[FunctionAnnotationDraft] = Field(min_length=1)
+
+
 class ClusterAnnotationResponse(DomainModel):
-    """作用：约束单函数簇 LLM 响应；输入：模型 JSON；输出：已校验函数注解集合。"""
+    """作用：承载绑定本地证据后的函数簇注解；输入：草稿与源码上下文；输出：可审计注解集合。"""
 
     unit_id: str
     annotations: list[FunctionAnnotation] = Field(min_length=1)

@@ -31,7 +31,7 @@ def new_job_id() -> str:
 class TaskEnvelope(DomainModel):
     #DomainModel是自定义基类，几乎确定继承自 Pydantic 的 BaseModel（或 RootModel）。
     #BaseModel 的元类是 ModelMetaclass，重写了 __new__ 来收集字段定义，构建验证逻辑。
-    """作用：定义确定性 Worker 的轻量任务信封；输入：Worker 类型、payload 和依赖；输出：审计任务；数据流：LangGraph 节点 -> WorkerPool。"""
+    """作用：定义确定性 Worker 的轻量任务信封；输入：Worker 类型、payload 和依赖；输出：审计任务；数据流：MainWorkflow 节点 -> WorkerPool。"""
 
     task_id: str = Field(default_factory=lambda: uuid4().hex) #Field()为 Pydantic 字段配置函数：返回 FieldInfo 对象，
                                                               #包含字段元数据（默认值、校验规则、描述等）。
@@ -81,11 +81,3 @@ class AnalysisOutcome(DomainModel):
     job_id: str
     result: AnalysisResult
     artifacts: dict[str, str] = Field(default_factory=dict)
-
-
-class PathClaim(DomainModel):
-    """作用：声明任务对路径的读写意图；输入：任务、路径和操作；输出：冲突检测记录；数据流：Worker 计划 -> ConflictResolver。"""
-
-    task_id: str
-    path: str
-    operation: str

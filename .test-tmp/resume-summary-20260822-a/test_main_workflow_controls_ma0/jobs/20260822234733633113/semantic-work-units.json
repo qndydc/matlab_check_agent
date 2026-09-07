@@ -1,0 +1,32 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "token_budget": 6000,
+  "units": [
+    {
+      "unit_id": "cluster-0000-11b8b36ada",
+      "symbol_ids": [
+        "cycleA",
+        "cycleB"
+      ],
+      "estimated_tokens": 264
+    },
+    {
+      "unit_id": "cluster-0001-835072e196",
+      "symbol_ids": [
+        "loadValues",
+        "main",
+        "processData",
+        "processData>helper",
+        "utils.normalize"
+      ],
+      "estimated_tokens": 614
+    },
+    {
+      "unit_id": "cluster-0002-88f6811ab5",
+      "symbol_ids": [
+        "orphan"
+      ],
+      "estimated_tokens": 166
+    }
+  ]
+}

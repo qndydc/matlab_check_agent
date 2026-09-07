@@ -14,9 +14,9 @@ htmlcov
 build
 dist
 var
-frontend/node_modules
-frontend/dist
-frontend/*.tsbuildinfo
+apps/*/frontend/node_modules
+apps/*/frontend/dist
+apps/*/frontend/*.tsbuildinfo
 tests
 docs
 tests/fixtures/matlab_projects/matlab2tikz-master

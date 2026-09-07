@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "architecture": {
+    "package_name": "basic",
+    "source_directory": "src/basic",
+    "test_directory": "tests",
+    "dependencies": [
+      "numpy",
+      "scipy"
+    ],
+    "rules": [
+      "保留公开入口的参数与返回值语义",
+      "数组运算优先使用 NumPy，科学计算优先使用 SciPy",
+      "不得依赖 MATLAB Runtime，除非迁移计划明确标记人工适配",
+      "所有生成代码必须通过目标环境的静态检查和差分测试"
+    ]
+  },
+  "units": [
+    {
+      "unit_id": "migration-8168dbc828",
+      "symbol_ids": [
+        "utils.normalize"
+      ],
+      "depends_on_units": [],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-b2b3cb6928",
+      "symbol_ids": [
+        "processData>helper"
+      ],
+      "depends_on_units": [],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-8803e77d5a",
+      "symbol_ids": [
+        "processData"
+      ],
+      "depends_on_units": [
+        "migration-8168dbc828",
+        "migration-b2b3cb6928"
+      ],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-88f6811ab5",
+      "symbol_ids": [
+        "orphan"
+      ],
+      "depends_on_units": [],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-32574a79c5",
+      "symbol_ids": [
+        "loadValues"
+      ],
+      "depends_on_units": [],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-0d6e4079e3",
+      "symbol_ids": [
+        "main"
+      ],
+      "depends_on_units": [
+        "migration-32574a79c5",
+        "migration-8803e77d5a"
+      ],
+      "status": "pending"
+    },
+    {
+      "unit_id": "migration-11b8b36ada",
+      "symbol_ids": [
+        "cycleA",
+        "cycleB"
+      ],
+      "depends_on_units": [],
+      "status": "pending"
+    }
+  ],
+  "symbol_to_module": {
+    "cycleA": "basic.cyclea",
+    "cycleB": "basic.cycleb",
+    "loadValues": "basic.loadvalues",
+    "main": "basic.main",
+    "orphan": "basic.orphan",
+    "processData": "basic.processdata",
+    "processData>helper": "basic.processdata",
+    "utils.normalize": "basic.utils.normalize"
+  },
+  "unsupported_symbols": []
+}

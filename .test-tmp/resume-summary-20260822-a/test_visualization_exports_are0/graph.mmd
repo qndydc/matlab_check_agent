@@ -1,0 +1,15 @@
+flowchart LR
+    n0["loop"]
+    n1["main"]
+    n2["orphan"]
+    n3["worker"]
+    n1 --> n3
+    n3 --> n0
+    n0 --> n3
+    classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px;
+    classDef core fill:#fef3c7,stroke:#d97706,stroke-width:2px;
+    classDef orphan fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:4 3;
+    class n1,n2 entry;
+    class n3 core;
+    class n2 orphan;
+    linkStyle 1,2 stroke:#dc2626,stroke-width:2px;

@@ -1,0 +1,99 @@
+{
+  "schema_version": "1.0",
+  "directed": true,
+  "project_root": "/project",
+  "nodes": [
+    {
+      "id": "loop",
+      "label": "loop",
+      "qualified_name": "loop",
+      "kind": "function",
+      "file_path": "loop.m",
+      "start_line": 1,
+      "end_line": 1,
+      "inputs": [],
+      "outputs": [],
+      "is_entry_point": false,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "main",
+      "label": "main",
+      "qualified_name": "main",
+      "kind": "script",
+      "file_path": "main.m",
+      "start_line": 1,
+      "end_line": 1,
+      "inputs": [],
+      "outputs": [],
+      "is_entry_point": true,
+      "is_core": false,
+      "is_orphan": false
+    },
+    {
+      "id": "orphan",
+      "label": "orphan",
+      "qualified_name": "orphan",
+      "kind": "function",
+      "file_path": "orphan.m",
+      "start_line": 1,
+      "end_line": 1,
+      "inputs": [],
+      "outputs": [],
+      "is_entry_point": true,
+      "is_core": false,
+      "is_orphan": true
+    },
+    {
+      "id": "worker",
+      "label": "worker",
+      "qualified_name": "worker",
+      "kind": "function",
+      "file_path": "worker.m",
+      "start_line": 1,
+      "end_line": 1,
+      "inputs": [],
+      "outputs": [],
+      "is_entry_point": false,
+      "is_core": true,
+      "is_orphan": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "e0",
+      "source": "main",
+      "target": "worker",
+      "is_cycle": false
+    },
+    {
+      "id": "e1",
+      "source": "worker",
+      "target": "loop",
+      "is_cycle": true
+    },
+    {
+      "id": "e2",
+      "source": "loop",
+      "target": "worker",
+      "is_cycle": true
+    }
+  ],
+  "entry_points": [
+    "main",
+    "orphan"
+  ],
+  "cycle_clusters": [],
+  "cycles": [
+    [
+      "loop",
+      "worker"
+    ]
+  ],
+  "unresolved_calls": {
+    "worker": [
+      "disp"
+    ]
+  }
+}

@@ -1,0 +1,203 @@
+{
+  "schema_version": "1.0",
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "language": "matlab",
+  "file_count": 7,
+  "symbol_count": 8,
+  "root": {
+    "node_id": "project:root",
+    "level": "project",
+    "name": "basic",
+    "path": "",
+    "symbol_id": null,
+    "kind": null,
+    "summary": null,
+    "child_count": 7,
+    "children": [
+      {
+        "node_id": "directory:+utils",
+        "level": "directory",
+        "name": "+utils",
+        "path": "+utils",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "file:+utils/normalize.m",
+            "level": "file",
+            "name": "normalize.m",
+            "path": "+utils/normalize.m",
+            "symbol_id": null,
+            "kind": null,
+            "summary": null,
+            "child_count": 1,
+            "children": [
+              {
+                "node_id": "symbol:utils.normalize",
+                "level": "symbol",
+                "name": "normalize",
+                "path": "+utils/normalize.m",
+                "symbol_id": "utils.normalize",
+                "kind": "function",
+                "summary": null,
+                "child_count": 0,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "node_id": "file:cycleA.m",
+        "level": "file",
+        "name": "cycleA.m",
+        "path": "cycleA.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "symbol:cycleA",
+            "level": "symbol",
+            "name": "cycleA",
+            "path": "cycleA.m",
+            "symbol_id": "cycleA",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      },
+      {
+        "node_id": "file:cycleB.m",
+        "level": "file",
+        "name": "cycleB.m",
+        "path": "cycleB.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "symbol:cycleB",
+            "level": "symbol",
+            "name": "cycleB",
+            "path": "cycleB.m",
+            "symbol_id": "cycleB",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      },
+      {
+        "node_id": "file:loadValues.m",
+        "level": "file",
+        "name": "loadValues.m",
+        "path": "loadValues.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "symbol:loadValues",
+            "level": "symbol",
+            "name": "loadValues",
+            "path": "loadValues.m",
+            "symbol_id": "loadValues",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      },
+      {
+        "node_id": "file:main.m",
+        "level": "file",
+        "name": "main.m",
+        "path": "main.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "symbol:main",
+            "level": "symbol",
+            "name": "main",
+            "path": "main.m",
+            "symbol_id": "main",
+            "kind": "script",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      },
+      {
+        "node_id": "file:orphan.m",
+        "level": "file",
+        "name": "orphan.m",
+        "path": "orphan.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 1,
+        "children": [
+          {
+            "node_id": "symbol:orphan",
+            "level": "symbol",
+            "name": "orphan",
+            "path": "orphan.m",
+            "symbol_id": "orphan",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      },
+      {
+        "node_id": "file:processData.m",
+        "level": "file",
+        "name": "processData.m",
+        "path": "processData.m",
+        "symbol_id": null,
+        "kind": null,
+        "summary": null,
+        "child_count": 2,
+        "children": [
+          {
+            "node_id": "symbol:processData",
+            "level": "symbol",
+            "name": "processData",
+            "path": "processData.m",
+            "symbol_id": "processData",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          },
+          {
+            "node_id": "symbol:processData>helper",
+            "level": "symbol",
+            "name": "helper",
+            "path": "processData.m",
+            "symbol_id": "processData>helper",
+            "kind": "function",
+            "summary": null,
+            "child_count": 0,
+            "children": []
+          }
+        ]
+      }
+    ]
+  }
+}

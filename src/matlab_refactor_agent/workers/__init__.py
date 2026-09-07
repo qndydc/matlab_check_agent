@@ -10,8 +10,9 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .analyzer_agent import AnalyzerAgent
+    from .analyzer_agent import AnalyzerAgent, AnalyzerWorker
     from .base import BaseWorker, WorkerContext
+    from .code_tree import CodeTreeBuilder
     from .dependency_analysis import DependencyAnalyzer
     from .graph_output import (
         build_graph_document,
@@ -20,19 +21,23 @@ if TYPE_CHECKING:
         write_mermaid,
     )
     from .matlab_parser import MaxxMatlabParser
-    from .parser_agent import ParserAgent
+    from .parser_agent import ParserAgent, ParserWorker
     from .scanning import MatlabFileDiscovery, MatlabProjectScanner
-    from .scanner_agent import ScannerAgent
+    from .scanner_agent import ScannerAgent, ScannerWorker
 
 _EXPORT_MODULES = {
     "AnalyzerAgent": ".analyzer_agent",
+    "AnalyzerWorker": ".analyzer_agent",
     "BaseWorker": ".base",
+    "CodeTreeBuilder": ".code_tree",
     "DependencyAnalyzer": ".dependency_analysis",
     "MatlabFileDiscovery": ".scanning",
     "MatlabProjectScanner": ".scanning",
     "MaxxMatlabParser": ".matlab_parser",
     "ParserAgent": ".parser_agent",
+    "ParserWorker": ".parser_agent",
     "ScannerAgent": ".scanner_agent",
+    "ScannerWorker": ".scanner_agent",
     "WorkerContext": ".base",
     "build_graph_document": ".graph_output",
     "render_dependency_tree": ".graph_output",
@@ -42,13 +47,17 @@ _EXPORT_MODULES = {
 
 __all__ = [
     "AnalyzerAgent",
+    "AnalyzerWorker",
     "BaseWorker",
+    "CodeTreeBuilder",
     "DependencyAnalyzer",
     "MatlabFileDiscovery",
     "MatlabProjectScanner",
     "MaxxMatlabParser",
     "ParserAgent",
+    "ParserWorker",
     "ScannerAgent",
+    "ScannerWorker",
     "WorkerContext",
     "build_graph_document",
     "render_dependency_tree",

@@ -9,22 +9,27 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import uuid4
 
 from matlab_refactor_agent.workers.scanning import MatlabFileDiscovery
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
+from matlab_refactor_agent.domain.models import DomainModel
 
 from .base import BaseWorker, WorkerContext
 
 
-class ScannerAgent(BaseWorker):
+class ScannerPayload(DomainModel):
+    project_root: str
+
+
+class ScannerWorker(BaseWorker):
     """作用：执行 Worker-1 文件发现；输入：项目路径任务；输出：manifest artifact；数据流：项目目录 -> 过滤/排序 -> MatlabFileManifest JSON。"""
 
     def __init__(self, exclude_patterns: list[str]) -> None:
-        """作用：装配文件发现能力；输入：排除规则；输出：ScannerAgent；数据流：项目配置 -> MatlabFileDiscovery。"""
+        """作用：装配文件发现能力；输入：排除规则；输出：ScannerWorker；数据流：项目配置 -> MatlabFileDiscovery。"""
 
         self._discovery = MatlabFileDiscovery(exclude_patterns)
 
@@ -52,11 +57,14 @@ class ScannerAgent(BaseWorker):
             },
         )
 
+    def validate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return ScannerPayload.model_validate(payload).model_dump(mode="python")
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """作用：独立演示 Worker-1 文件发现；输入：项目、artifact 目录及排除规则；输出：WorkerResult JSON 和退出码；数据流：CLI -> ScannerAgent -> file-manifest artifact -> stdout。"""
 
-    parser = argparse.ArgumentParser(description="演示 Worker-1 ScannerAgent")
+    parser = argparse.ArgumentParser(description="演示 Worker-1 ScannerWorker")
     parser.add_argument("project", type=Path, help="MATLAB 项目目录")
     parser.add_argument(
         "--artifact-dir", type=Path, default=Path("var/worker-demos")
@@ -69,7 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         worker_kind=WorkerKind.SCANNER,
         payload={"project_root": str(args.project)},
     )
-    result = ScannerAgent(args.exclude).execute(
+    result = ScannerWorker(args.exclude).execute(
         task, WorkerContext(ArtifactStore(args.artifact_dir))
     )
     print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
@@ -78,3 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# 兼容 0.1 版导入路径；新代码使用 ScannerWorker。
+ScannerAgent = ScannerWorker

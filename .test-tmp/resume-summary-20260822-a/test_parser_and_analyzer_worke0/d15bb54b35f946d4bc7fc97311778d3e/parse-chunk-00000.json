@@ -1,0 +1,65 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "chunk_index": 0,
+  "files": [
+    {
+      "path": "+utils/normalize.m",
+      "kind": "function",
+      "package": "utils",
+      "functions": [
+        {
+          "name": "normalize",
+          "qualified_name": "utils.normalize",
+          "file_path": "+utils/normalize.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "output"
+          ],
+          "calls": [
+            "max"
+          ],
+          "called_by": [],
+          "line_count": 4,
+          "start_line": 1,
+          "end_line": 4
+        }
+      ],
+      "line_count": 5,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "cycleA.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "cycleA",
+          "qualified_name": "cycleA",
+          "file_path": "cycleA.m",
+          "kind": "function",
+          "inputs": [
+            "value"
+          ],
+          "outputs": [
+            "value"
+          ],
+          "calls": [
+            "cycleB"
+          ],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "line_count": 4,
+      "parse_status": "parsed",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

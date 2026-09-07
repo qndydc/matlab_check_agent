@@ -9,13 +9,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Literal, Sequence
 from uuid import uuid4
 
 from matlab_refactor_agent.workers.matlab_parser import MaxxMatlabParser
 from matlab_refactor_agent.domain.enums import WorkerKind
 from matlab_refactor_agent.domain.exceptions import ArtifactError, OrchestrationError
 from matlab_refactor_agent.domain.models import (
+    DomainModel,
     MatlabFileManifest,
     ParseChunkResult,
     ScanResult,
@@ -24,14 +25,27 @@ from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResul
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 
 from .base import BaseWorker, WorkerContext
-from .scanner_agent import ScannerAgent
+from .scanner_agent import ScannerWorker
 
 
-class ParserAgent(BaseWorker):
+class ParseChunkPayload(DomainModel):
+    operation: Literal["parse_chunk"]
+    file_manifest: str
+    chunk_index: int
+    files: list[str]
+
+
+class AggregatePayload(DomainModel):
+    operation: Literal["aggregate"]
+    file_manifest: str
+    chunk_results: list[str]
+
+
+class ParserWorker(BaseWorker):
     """作用：执行 Worker-2 分片解析与 fan-in 聚合；输入：manifest/分片引用；输出：chunk 或 scan artifact；数据流：文件清单 -> maxx 解析 -> 分片 -> ScanResult。"""
 
     def __init__(self) -> None:
-        """作用：装配 MATLAB 单文件解析器；输入：已安装 maxx；输出：ParserAgent；数据流：Worker 工厂 -> MaxxMatlabParser。"""
+        """作用：装配 MATLAB 单文件解析器；输入：已安装 maxx；输出：ParserWorker；数据流：Worker 工厂 -> MaxxMatlabParser。"""
 
         self._parser = MaxxMatlabParser()
 
@@ -49,7 +63,12 @@ class ParserAgent(BaseWorker):
             return self._parse_chunk(task, context)
         if operation == "aggregate":
             return self._aggregate(task, context)
-        raise OrchestrationError(f"ParserAgent 不支持 operation: {operation}")
+        raise OrchestrationError(f"ParserWorker 不支持 operation: {operation}")
+
+    def validate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        operation = payload.get("operation")
+        model = ParseChunkPayload if operation == "parse_chunk" else AggregatePayload
+        return model.model_validate(payload).model_dump(mode="python")
 
     def _parse_chunk(
         self, task: TaskEnvelope, context: WorkerContext
@@ -140,7 +159,7 @@ class ParserAgent(BaseWorker):
 def main(argv: Sequence[str] | None = None) -> int:
     """作用：独立演示 Worker-2 分片和聚合；输入：项目、分片大小和 artifact 目录；输出：聚合 WorkerResult JSON；数据流：CLI -> manifest -> 多个 parse_chunk -> aggregate -> stdout。"""
 
-    parser = argparse.ArgumentParser(description="演示 Worker-2 ParserAgent")
+    parser = argparse.ArgumentParser(description="演示 Worker-2 ParserWorker")
     parser.add_argument("project", type=Path, help="MATLAB 项目目录")
     parser.add_argument("--chunk-size", type=int, default=100)
     parser.add_argument(
@@ -158,12 +177,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         worker_kind=WorkerKind.SCANNER,
         payload={"project_root": str(args.project)},
     )
-    scanner_result = ScannerAgent(args.exclude).execute(scanner_task, context)
+    scanner_result = ScannerWorker(args.exclude).execute(scanner_task, context)
     manifest_reference = scanner_result.artifacts["file_manifest"]
     manifest = context.artifact_store.read_model(
         manifest_reference, MatlabFileManifest
     )
-    worker = ParserAgent()
+    worker = ParserWorker()
     chunk_references: list[str] = []
     for chunk_index, offset in enumerate(
         range(0, len(manifest.files), args.chunk_size)
@@ -196,3 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# 兼容 0.1 版导入路径；新代码使用 ParserWorker。
+ParserAgent = ParserWorker

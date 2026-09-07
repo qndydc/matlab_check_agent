@@ -1,0 +1,15 @@
+{
+  "unit_id": "migration-8803e77d5a",
+  "files": [
+    {
+      "path": "src/basic/migration-8803e77d5a.py",
+      "content": "\"\"\"Generated test module.\"\"\"\n",
+      "symbol_ids": [
+        "processData"
+      ]
+    }
+  ],
+  "assumptions": [],
+  "manual_review": [],
+  "confidence": 0.8
+}

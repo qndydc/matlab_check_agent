@@ -1,0 +1,220 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "functions": [
+    {
+      "name": "cycleA",
+      "qualified_name": "cycleA",
+      "file_path": "cycleA.m",
+      "kind": "function",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "calls": [
+        "cycleB"
+      ],
+      "called_by": [
+        "cycleB"
+      ],
+      "line_count": 3,
+      "start_line": 1,
+      "end_line": 3
+    },
+    {
+      "name": "cycleB",
+      "qualified_name": "cycleB",
+      "file_path": "cycleB.m",
+      "kind": "function",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "calls": [
+        "cycleA"
+      ],
+      "called_by": [
+        "cycleA"
+      ],
+      "line_count": 3,
+      "start_line": 1,
+      "end_line": 3
+    },
+    {
+      "name": "loadValues",
+      "qualified_name": "loadValues",
+      "file_path": "loadValues.m",
+      "kind": "function",
+      "inputs": [],
+      "outputs": [
+        "values"
+      ],
+      "calls": [],
+      "called_by": [
+        "main"
+      ],
+      "line_count": 4,
+      "start_line": 1,
+      "end_line": 4
+    },
+    {
+      "name": "main",
+      "qualified_name": "main",
+      "file_path": "main.m",
+      "kind": "script",
+      "inputs": [],
+      "outputs": [],
+      "calls": [
+        "disp",
+        "loadValues",
+        "processData"
+      ],
+      "called_by": [],
+      "line_count": 5,
+      "start_line": 1,
+      "end_line": 5
+    },
+    {
+      "name": "orphan",
+      "qualified_name": "orphan",
+      "file_path": "orphan.m",
+      "kind": "function",
+      "inputs": [
+        "value"
+      ],
+      "outputs": [
+        "value"
+      ],
+      "calls": [],
+      "called_by": [],
+      "line_count": 3,
+      "start_line": 1,
+      "end_line": 3
+    },
+    {
+      "name": "processData",
+      "qualified_name": "processData",
+      "file_path": "processData.m",
+      "kind": "function",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "calls": [
+        "helper",
+        "utils.normalize"
+      ],
+      "called_by": [
+        "main"
+      ],
+      "line_count": 5,
+      "start_line": 1,
+      "end_line": 5
+    },
+    {
+      "name": "helper",
+      "qualified_name": "processData>helper",
+      "file_path": "processData.m",
+      "kind": "function",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "total"
+      ],
+      "calls": [
+        "sum"
+      ],
+      "called_by": [
+        "processData"
+      ],
+      "line_count": 3,
+      "start_line": 7,
+      "end_line": 9
+    },
+    {
+      "name": "normalize",
+      "qualified_name": "utils.normalize",
+      "file_path": "+utils/normalize.m",
+      "kind": "function",
+      "inputs": [
+        "values"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "calls": [
+        "max"
+      ],
+      "called_by": [
+        "processData"
+      ],
+      "line_count": 4,
+      "start_line": 1,
+      "end_line": 4
+    }
+  ],
+  "dependencies": [
+    {
+      "source": "cycleA",
+      "target": "cycleB"
+    },
+    {
+      "source": "cycleB",
+      "target": "cycleA"
+    },
+    {
+      "source": "main",
+      "target": "loadValues"
+    },
+    {
+      "source": "main",
+      "target": "processData"
+    },
+    {
+      "source": "processData",
+      "target": "processData>helper"
+    },
+    {
+      "source": "processData",
+      "target": "utils.normalize"
+    }
+  ],
+  "cycle_clusters": [
+    [
+      "cycleA",
+      "cycleB"
+    ]
+  ],
+  "cycles": [
+    [
+      "cycleA",
+      "cycleB"
+    ]
+  ],
+  "orphans": [
+    "orphan"
+  ],
+  "core_functions": [],
+  "entry_points": [
+    "main",
+    "orphan"
+  ],
+  "unresolved_calls": {
+    "utils.normalize": [
+      "max"
+    ],
+    "main": [
+      "disp"
+    ],
+    "processData>helper": [
+      "sum"
+    ]
+  },
+  "diagnostics": []
+}

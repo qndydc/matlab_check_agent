@@ -5,13 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "matlab-refactor-agent"
 version = "0.1.0"
-description = "Analyze large MATLAB codebases and prepare safe refactoring plans."
+description = "Deterministic MATLAB analysis, semantic pipelines, and a MATLAB-to-Python migration agent."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115,<1",
-    "langgraph>=1.2,<2",
-    "langgraph-checkpoint-sqlite>=3.1,<4",
+    "langgraph>=0.2,<2",
     "maxx>=0.8.0,<0.9",
     "networkx>=3.0,<4",
     "numpy>=2.1,<3",
@@ -33,6 +32,8 @@ dev = [
 [project.scripts]
 matlab-refactor = "matlab_refactor_agent.interfaces.cli.main:main"
 matlab-refactor-web = "matlab_refactor_agent.interfaces.api.main:main"
+matlab-semantic-web = "matlab_refactor_agent.apps.semantic.backend.main:main"
+matlab-migration-web = "matlab_refactor_agent.apps.migration.backend.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

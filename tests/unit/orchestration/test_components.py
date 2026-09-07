@@ -1,5 +1,5 @@
 """
-Description: 验证 ArtifactStore、ConflictResolver 和确定性 Worker 路由基础行为。
+Description: 验证 ArtifactStore、质量门禁和确定性 Worker 路由基础行为。
 References: orchestration 组件、domain.orchestration、pytest。
 Referenced By: pytest 测试发现。
 """
@@ -9,20 +9,12 @@ from pathlib import Path
 import pytest
 
 from matlab_refactor_agent.domain.enums import WorkerKind
-from matlab_refactor_agent.domain.exceptions import (
-    ArtifactError,
-    ConflictError,
-    QualityGateError,
-)
+from matlab_refactor_agent.domain.exceptions import ArtifactError, QualityGateError
 from matlab_refactor_agent.domain.models import AnalysisResult, MatlabFileInfo, ScanResult
 from matlab_refactor_agent.domain.semantics import SemanticWorkUnits
-from matlab_refactor_agent.domain.orchestration import (
-    PathClaim,
-    TaskEnvelope,
-    WorkerResult,
-)
+from matlab_refactor_agent.domain.orchestration import TaskEnvelope, WorkerResult
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
-from matlab_refactor_agent.orchestration import ConflictResolver, QualityGate, WorkerPool
+from matlab_refactor_agent.orchestration import QualityGate, WorkerPool
 from matlab_refactor_agent.workers.base import BaseWorker, WorkerContext
 
 
@@ -54,21 +46,6 @@ def test_artifact_store_round_trip_and_boundary(tmp_path: Path) -> None:
         store.read_model(str(tmp_path / "outside.json"), ScanResult)
 
 
-def test_conflict_resolver_allows_reads_and_rejects_write_conflicts() -> None:
-    """作用：验证路径仲裁；输入：读写 PathClaim；输出：断言/ConflictError；数据流：声明 -> 同路径兼容规则。"""
-
-    resolver = ConflictResolver()
-    resolver.claim(PathClaim(task_id="reader1", path="file.m", operation="read"))
-    resolver.claim(PathClaim(task_id="reader2", path="file.m", operation="read"))
-
-    with pytest.raises(ConflictError):
-        resolver.claim(PathClaim(task_id="writer", path="file.m", operation="write"))
-
-    resolver.release("reader1")
-    resolver.release("reader2")
-    resolver.claim(PathClaim(task_id="writer", path="file.m", operation="write"))
-
-
 def test_worker_pool_routes_deterministic_stage(tmp_path: Path) -> None:
     """作用：验证 WorkerPool 类型路由；输入：Scanner 任务；输出：成功 WorkerResult。"""
 
@@ -93,7 +70,7 @@ def test_semantic_preflight_blocks_failed_parser_files(tmp_path: Path) -> None:
         files=[MatlabFileInfo(path="broken.m", parse_status="failed")],
     )
     analysis = AnalysisResult(project_root=str(tmp_path))
-    units = SemanticWorkUnits(project_root=str(tmp_path), token_budget=6000)
+    units = SemanticWorkUnits(project_root=str(tmp_path), token_budget=32_768)
 
     with pytest.raises(QualityGateError, match="存在解析失败文件"):
         gate.validate_semantic_preflight(scan, analysis, units, [])

@@ -1,0 +1,21 @@
+flowchart LR
+    n0["cycleA"]
+    n1["cycleB"]
+    n2["loadValues"]
+    n3["main"]
+    n4["orphan"]
+    n5["processData"]
+    n6["processData&gt;helper"]
+    n7["utils.normalize"]
+    n0 --> n1
+    n1 --> n0
+    n3 --> n2
+    n3 --> n5
+    n5 --> n6
+    n5 --> n7
+    classDef entry fill:#dbeafe,stroke:#2563eb,stroke-width:2px;
+    classDef core fill:#fef3c7,stroke:#d97706,stroke-width:2px;
+    classDef orphan fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:4 3;
+    class n3,n4 entry;
+    class n4 orphan;
+    linkStyle 0,1 stroke:#dc2626,stroke-width:2px;

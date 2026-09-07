@@ -1,0 +1,222 @@
+{
+  "project_root": "D:\\Aprojet\\py\\matlab_check_agent\\tests\\fixtures\\matlab_projects\\basic",
+  "chunk_index": 0,
+  "files": [
+    {
+      "path": "+utils/normalize.m",
+      "kind": "function",
+      "package": "utils",
+      "functions": [
+        {
+          "name": "normalize",
+          "qualified_name": "utils.normalize",
+          "file_path": "+utils/normalize.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "output"
+          ],
+          "calls": [
+            "max"
+          ],
+          "called_by": [],
+          "line_count": 4,
+          "start_line": 1,
+          "end_line": 4
+        }
+      ],
+      "line_count": 5,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "cycleA.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "cycleA",
+          "qualified_name": "cycleA",
+          "file_path": "cycleA.m",
+          "kind": "function",
+          "inputs": [
+            "value"
+          ],
+          "outputs": [
+            "value"
+          ],
+          "calls": [
+            "cycleB"
+          ],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "line_count": 4,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "cycleB.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "cycleB",
+          "qualified_name": "cycleB",
+          "file_path": "cycleB.m",
+          "kind": "function",
+          "inputs": [
+            "value"
+          ],
+          "outputs": [
+            "value"
+          ],
+          "calls": [
+            "cycleA"
+          ],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "line_count": 4,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "loadValues.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "loadValues",
+          "qualified_name": "loadValues",
+          "file_path": "loadValues.m",
+          "kind": "function",
+          "inputs": [],
+          "outputs": [
+            "values"
+          ],
+          "calls": [],
+          "called_by": [],
+          "line_count": 4,
+          "start_line": 1,
+          "end_line": 4
+        }
+      ],
+      "line_count": 5,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "main.m",
+      "kind": "script",
+      "package": null,
+      "functions": [
+        {
+          "name": "main",
+          "qualified_name": "main",
+          "file_path": "main.m",
+          "kind": "script",
+          "inputs": [],
+          "outputs": [],
+          "calls": [
+            "disp",
+            "loadValues",
+            "processData"
+          ],
+          "called_by": [],
+          "line_count": 5,
+          "start_line": 1,
+          "end_line": 5
+        }
+      ],
+      "line_count": 5,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "orphan.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "orphan",
+          "qualified_name": "orphan",
+          "file_path": "orphan.m",
+          "kind": "function",
+          "inputs": [
+            "value"
+          ],
+          "outputs": [
+            "value"
+          ],
+          "calls": [],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "line_count": 4,
+      "parse_status": "parsed",
+      "diagnostics": []
+    },
+    {
+      "path": "processData.m",
+      "kind": "function",
+      "package": null,
+      "functions": [
+        {
+          "name": "processData",
+          "qualified_name": "processData",
+          "file_path": "processData.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "output"
+          ],
+          "calls": [
+            "helper",
+            "utils.normalize"
+          ],
+          "called_by": [],
+          "line_count": 5,
+          "start_line": 1,
+          "end_line": 5
+        },
+        {
+          "name": "helper",
+          "qualified_name": "processData>helper",
+          "file_path": "processData.m",
+          "kind": "function",
+          "inputs": [
+            "values"
+          ],
+          "outputs": [
+            "total"
+          ],
+          "calls": [
+            "sum"
+          ],
+          "called_by": [],
+          "line_count": 3,
+          "start_line": 7,
+          "end_line": 9
+        }
+      ],
+      "line_count": 10,
+      "parse_status": "parsed",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

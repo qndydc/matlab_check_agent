@@ -1,7 +1,7 @@
 """
 Description: 为确定性 Worker 发现 MATLAB 文件，并提供同步扫描解析流程。
 References: parser.base、domain.models、fnmatch。
-Referenced By: ScannerAgent 和 scanner 单元测试。
+Referenced By: ScannerWorker 和 scanner 单元测试。
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 
-from matlab_refactor_agent.domain.exceptions import ProjectPathError
+from matlab_refactor_agent.domain.exceptions import ProjectPathError, OrchestrationError
 from matlab_refactor_agent.domain.models import MatlabFileManifest, ScanResult
 
 from .parser_protocol import MatlabParser
@@ -76,6 +76,15 @@ class MatlabProjectScanner:
             files=files,
             excluded_count=manifest.excluded_count,
         )
+
+
+def validate_scan_inventory(scan: ScanResult, exclude_patterns: list[str]) -> None:
+    """Reject resumes when the source inventory changed, including added files."""
+    root = Path(scan.project_root).resolve()
+    expected = {(root / item.path).resolve() for item in scan.files}
+    current = {(root / item).resolve() for item in MatlabFileDiscovery(exclude_patterns).discover(root).files}
+    if current != expected:
+        raise OrchestrationError("MATLAB 文件清单已变化；请选择完全重跑以重建结构图")
 
 
 def _validate_project_root(project_root: Path) -> Path:

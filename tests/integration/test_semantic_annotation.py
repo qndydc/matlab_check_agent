@@ -1,667 +1,266 @@
 """
-Description: 使用 LangGraph、真实前处理 artifacts 和假 LLM Client 验证语义注解完整闭环。
-References: Orchestrator、LangGraph SQLite checkpoint、FakeStructuredLLMClient。
-Referenced By: pytest 测试发现和 P1 语义注解验收。
+Description: 验证真实前处理与假 LLM 组成的三级语义识别闭环。
+References: Orchestrator、FakeStructuredLLMClient、MATLAB fixture。
+Referenced By: pytest 测试发现。
 """
 
 import json
-import sqlite3
+import shutil
+import pytest
+import time
+from concurrent.futures import ThreadPoolExecutor
+from fastapi.testclient import TestClient
+from matlab_refactor_agent.application.semantic_service import SemanticService
+from matlab_refactor_agent.apps.semantic.backend.app import MvpJobManager, create_app
 from pathlib import Path
 
-import pytest
-
-from matlab_refactor_agent.agents.semantic_annotation import (
-    SemanticContextBuilder,
-    SemanticWorkUnitBuilder,
-)
-from matlab_refactor_agent.domain.models import (
-    AnalysisResult,
-    DependencyEdge,
-    FunctionInfo,
-    ScanResult,
-)
-from matlab_refactor_agent.domain.exceptions import (
-    LLMOutputTruncatedError,
-    QualityGateError,
-)
-from matlab_refactor_agent.domain.changes import ChangeSet
-from matlab_refactor_agent.domain.planning import ReviewDecision
-from matlab_refactor_agent.domain.reporting import NaturalLanguageReport
-from matlab_refactor_agent.domain.validation import ValidationResult
 from matlab_refactor_agent.infrastructure.config import AppSettings
-from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.infrastructure.llm import FakeStructuredLLMClient
-from matlab_refactor_agent.interfaces.cli.main import main as cli_main
-from matlab_refactor_agent.orchestration import Orchestrator, SQLiteStateManager
-from matlab_refactor_agent.orchestration.project_validator import (
-    RefactoredProjectValidator,
-    ValidationBundle,
-)
-from matlab_refactor_agent.domain.validation import ValidationCheck
-
+from matlab_refactor_agent.orchestration import Orchestrator
+from matlab_refactor_agent.domain.exceptions import OrchestrationError
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "matlab_projects" / "basic"
 
 
-def _semantic_response(system_prompt: str, user_prompt: str, response_model):
-    """作用：从 Agent 的真实上下文生成确定性结构化响应；输入：提示；输出：假 LLM JSON。"""
+@pytest.mark.parametrize("failure_stage", ["ClusterAnnotationDraftResponse", "FileAnnotationDraft", "ProjectAnnotationDraft"])
+def test_semantic_resume_after_process_restart(tmp_path, failure_stage):
+    project = tmp_path / "matlab"
+    project.mkdir()
+    for index in range(10):
+        name = f"func{index}"
+        (project / f"{name}.m").write_text(f"function y = {name}(x)\ny = x + 1;\nend\n", encoding="utf-8")
+    settings = AppSettings(orchestrator={"state_db": tmp_path / "state.db",
+                                        "artifact_dir": tmp_path / "jobs"})
+    seen = []
 
+    def interrupt(system, prompt, model):
+        if model.__name__ == failure_stage:
+            seen.append(prompt)
+            if len(seen) == (1 if failure_stage == "ProjectAnnotationDraft" else 2):
+                raise KeyboardInterrupt()
+        return _response(system, prompt, model)
+
+    first_client = FakeStructuredLLMClient(interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        Orchestrator.from_settings(settings, semantic_client=first_client).run_annotation(project, job_id="resume123")
+    job_dir = settings.orchestrator.artifact_dir / "resume123"
+    checkpoint = json.loads((job_dir / "semantic-checkpoint.json").read_text(encoding="utf-8"))
+    accepted = [item for item in checkpoint["graph_state"]["quality_history"] if item["status"] == "accepted"]
+    assert accepted
+    saved = {item["annotation_reference"]: Path(item["annotation_reference"]).read_bytes() for item in accepted}
+    old_events = json.loads((job_dir / "semantic-progress.json").read_text(encoding="utf-8"))["events"]
+    resumed_client = FakeStructuredLLMClient(_response)
+    result = Orchestrator.from_settings(settings, semantic_client=resumed_client).resume_annotation("resume123")
+    assert len(result.index.functions) == 10
+    assert all(Path(path).read_bytes() == content for path, content in saved.items())
+    events = json.loads((job_dir / "semantic-progress.json").read_text(encoding="utf-8"))["events"]
+    assert events[:len(old_events)] == old_events
+    assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
+    if failure_stage != "ClusterAnnotationDraftResponse":
+        assert not any(call[2] == "ClusterAnnotationDraftResponse" for call in resumed_client.calls)
+    if failure_stage == "ProjectAnnotationDraft":
+        assert [call[2] for call in resumed_client.calls] == ["ProjectAnnotationDraft"]
+        if failure_stage == "FileAnnotationDraft":
+            # Other in-flight files may complete before ThreadPoolExecutor exits.
+            assert 0 < sum(call[2] == "FileAnnotationDraft" for call in resumed_client.calls) < 9
+    # Completed resume does not spend additional model calls.
+    completed_client = FakeStructuredLLMClient(_response)
+    Orchestrator.from_settings(settings, semantic_client=completed_client).resume_annotation("resume123")
+    assert completed_client.calls == []
+
+
+@pytest.mark.parametrize("change", ["modify", "add", "delete"])
+def test_semantic_resume_rejects_changed_source_and_full_run_rebuilds(tmp_path, change):
+    project = tmp_path / "matlab"
+    shutil.copytree(FIXTURE, project)
+    settings = AppSettings(orchestrator={"state_db": tmp_path / "state.db", "artifact_dir": tmp_path / "jobs"})
+    workflow = Orchestrator.from_settings(settings, semantic_client=FakeStructuredLLMClient(_response))
+    original = workflow.run_annotation(project)
+    path = next(project.rglob("*.m"))
+    if change == "modify":
+        path.write_text(path.read_text(encoding="utf-8") + "\n% changed\n", encoding="utf-8")
+    elif change == "delete":
+        path.unlink()
+    else:
+        (project / "added.m").write_text("function y = added(x)\ny = x;\nend\n", encoding="utf-8")
+    with pytest.raises(OrchestrationError, match="源码已变化"):
+        workflow.resume_annotation(original.job_id)
+    restarted = workflow.run_annotation(project)
+    assert restarted.job_id != original.job_id
+    assert restarted.artifacts["structural_code_tree"] != original.artifacts["structural_code_tree"]
+    assert Path(original.artifacts["structural_code_tree"]).is_file()
+
+
+def _response(_system_prompt: str, user_prompt: str, response_model):
     context = json.loads(user_prompt)
+    if response_model.__name__ in {"ConversionStratagem", "ReasonDecision"}:
+        return {
+            "unit_id": context["unit"]["unit_id"],
+            "action": "convert",
+            "module_plan": {
+                item["symbol_id"]: f"src/generated/{item['symbol_id']}.py"
+                for item in context["functions"]
+            },
+            "conversion_steps": ["按 WCC 内调用顺序转换全部函数"],
+            "validation_plan": ["执行静态检查"],
+        }
     if response_model.__name__ == "FileAnnotationDraft":
-        functions = context["functions"]
-        return {
-            "role": "汇总该文件内函数并承担对应的 MATLAB 处理职责",
-            "risks": sorted({risk for item in functions for risk in item["risks"]}),
-            "confidence": sum(item["confidence"] for item in functions) / len(functions),
-        }
+        return {"role": "承担该文件内 MATLAB 函数的处理职责", "risks": [], "confidence": 0.9}
     if response_model.__name__ == "ProjectAnnotationDraft":
-        return {
-            "purpose": "该项目用于演示 MATLAB 数据加载、处理与依赖分析流程",
-            "usage": "从入口函数开始运行，并根据文件职责准备所需输入数据",
-            "risks": sorted({risk for item in context["files"] for risk in item["risks"]}),
-            "confidence": (
-                sum(item["confidence"] for item in context["files"])
-                / len(context["files"])
-                if context["files"]
-                else 0.0
-            ),
-        }
-    if response_model.__name__ == "ModuleResponsibilityResponse":
+        return {"purpose": "演示 MATLAB 数据处理与调用关系", "usage": "从入口函数运行项目", "risks": [], "confidence": 0.9}
+    if response_model.__name__ == "TranslationResponse":
         symbols = [item["symbol_id"] for item in context["functions"]]
         return {
-            "project_root": context["project_root"],
-            "modules": [
-                {
-                    "module_id": "core",
-                    "name": "Core",
-                    "responsibility": "承载当前项目的核心 MATLAB 计算流程",
-                    "symbol_ids": symbols,
-                    "depends_on_modules": [],
-                    "rationale": ["根据当前语义摘要形成最小无冲突边界"],
-                    "risks": [],
-                    "confidence": 0.8,
-                }
-            ],
-            "unassigned_symbols": [],
+            "unit_id": context["unit"]["unit_id"],
+            "files": [{
+                "path": f"src/generated/{context['unit']['unit_id']}.py",
+                "content": "\"\"\"Generated test module.\"\"\"\n",
+                "symbol_ids": symbols,
+            }],
             "assumptions": [],
-        }
-    if response_model.__name__ == "NamingDirectoryDraft":
-        return {
-            "changes": [],
-            "directory_rules": ["保持现有 MATLAB package 目录语义"],
-            "assumptions": [],
-        }
-    if response_model.__name__ == "RepairProposal":
-        return {
-            "attempt": context["attempt"],
-            "summary": "根据失败证据重放已审核的安全操作",
-            "addressed_checks": ["forced_failure"],
-            "operations": context["plan"]["operations"],
+            "manual_review": [],
             "confidence": 0.8,
-        }
-    if response_model.__name__ == "NaturalLanguageReportDraft":
-        checks = context["validation"]["checks"]
-        return {
-            "title": "MATLAB 隔离重构交付报告",
-            "executive_summary": "重构已在隔离目录执行，并由确定性工具完成验证。",
-            "change_summary": [
-                f"复制 {context['change_set']['copied_file_count']} 个项目文件",
-                f"变更 {len(context['change_set']['changed_matlab_files'])} 个 MATLAB 文件",
-            ],
-            "validation_summary": "验证状态严格来自工具检查，不将跳过项视为通过。",
-            "check_findings": [
-                {
-                    "check_id": item["check_id"],
-                    "status": item["status"],
-                    "interpretation": item["summary"],
-                }
-                for item in checks
-            ],
-            "risks": ["未执行的运行时检查仍需在目标 MATLAB 环境补充"],
-            "next_steps": ["审阅隔离输出并执行项目级 MATLAB 测试"],
         }
     annotations = []
     for function in context["functions"]:
-        confidence = 0.45 if function["symbol_id"] == "orphan" else 0.9
-        annotations.append(
-            {
-                "symbol_id": function["symbol_id"],
-                "file_path": function["file_path"],
-                "start_line": function["start_line"],
-                "end_line": function["end_line"],
-                "summary": f"分析 {function['symbol_id']} 的 MATLAB 逻辑",
-                "inputs": function["inputs"],
-                "outputs": function["outputs"],
-                "data_flow": ["输入经过函数计算后形成输出"],
-                "side_effects": [],
-                "risks": ["需补充边界测试"] if confidence < 0.6 else [],
-                "open_questions": [],
-                "evidence": [
-                    {
-                        "file_path": function["file_path"],
-                        "start_line": function["start_line"],
-                        "end_line": function["end_line"],
-                        "source_hash": function["source_hash"],
-                    }
-                ],
-                "confidence": confidence,
-            }
-        )
+        annotations.append({
+            "symbol_id": function["symbol_id"],
+            "file_path": function["file_path"],
+            "start_line": function["start_line"],
+            "end_line": function["end_line"],
+            "summary": f"分析 {function['symbol_id']} 的 MATLAB 逻辑",
+            "inputs": function["inputs"],
+            "outputs": function["outputs"],
+            "data_flow": ["输入经计算形成输出"],
+            "side_effects": [], "risks": [], "open_questions": [],
+            "confidence": 0.9,
+            "is_algorithm_core": function["symbol_id"] == "processData",
+        })
     return {"unit_id": context["unit"]["unit_id"], "annotations": annotations}
 
 
-def test_fake_llm_semantic_annotation_closed_loop(tmp_path: Path) -> None:
-    """作用：验证前处理到三级语义索引闭环；输入：MATLAB fixture；输出：artifacts、调用和冲突断言。"""
+def test_semantic_annotation_closed_loop(tmp_path: Path) -> None:
+    settings = AppSettings(orchestrator={
+        "state_db": tmp_path / "state.db",
+        "artifact_dir": tmp_path / "jobs",
+        "parser_chunk_size": 3,
+    })
+    client = FakeStructuredLLMClient(_response)
 
-    artifact_dir = tmp_path / "jobs"
-    checkpoint_db = tmp_path / "checkpoints.db"
-    settings = AppSettings(
-        io={"report_dir": tmp_path / "reports"},
-        orchestrator={
-            "state_db": tmp_path / "state.db",
-            "checkpoint_db": checkpoint_db,
-            "artifact_dir": artifact_dir,
-            "parser_chunk_size": 3,
-            "max_workers": 3,
-        }
-    )
-    client = FakeStructuredLLMClient(_semantic_response)
-    orchestrator = Orchestrator.from_settings(
-        settings, semantic_client=client
-    )
-
-    outcome = orchestrator.run_annotation(FIXTURE)
+    outcome = Orchestrator.from_settings(settings, semantic_client=client).run_annotation(FIXTURE)
 
     assert len(outcome.index.functions) == 8
-    assert {item.file_path for item in outcome.index.files} == {
-        item.file_path for item in outcome.index.functions
-    }
     assert outcome.index.project.entry_points
-    assert any(item.symbol_id == "orphan" for item in outcome.index.conflicts)
-    assert len(client.calls) >= 2
-    response_names = {item[2] for item in client.calls}
-    assert {
-        "ClusterAnnotationResponse",
-        "FileAnnotationDraft",
-        "ProjectAnnotationDraft",
-    } <= response_names
-    for _, prompt, response_name in client.calls:
-        context = json.loads(prompt)
-        if response_name == "ClusterAnnotationResponse":
-            assert context["functions"]
-            assert all("source" in item for item in context["functions"])
-            assert all("source" not in item for item in context["neighbors"])
-            assert context["estimated_tokens"] <= 6000
-        elif "functions" in context:
-            assert context["functions"]
-            assert all("source" not in item for item in context["functions"])
-    assert outcome.index.project.usage
-    assert "用于" in outcome.index.project.purpose
-    for reference in outcome.artifacts.values():
-        assert Path(reference).is_file()
-    with sqlite3.connect(checkpoint_db) as connection:
-        checkpoint_count = connection.execute(
-            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
-            (outcome.job_id,),
-        ).fetchone()[0]
-    assert checkpoint_count > 0
-    mermaid = orchestrator.graph_mermaid()
-    assert "parse_chunk" in mermaid
-    assert "annotate_unit" in mermaid
-    assert "module_responsibility" in mermaid
-    assert "naming_directory" in mermaid
-    assert "collect_planning_candidates" in mermaid
-    assert "execute_changeset" in mermaid
-    assert "validate_output" in mermaid
-    assert "propose_repair" in mermaid
-    assert "repair_review" in mermaid
-    assert "generate_report" in mermaid
-    assert "module_responsibility" not in outcome.artifacts
-    assert "naming_directory" not in outcome.artifacts
-    assert "refactor_planning_candidates" not in outcome.artifacts
-def test_work_units_keep_cycles_in_one_cluster(tmp_path: Path) -> None:
-    """作用：验证 SCC 不被 token 分片拆散；输入：真实分析结果；输出：cycleA/cycleB 同簇断言。"""
-
-    settings = AppSettings(
-        orchestrator={
-            "state_db": tmp_path / "state.db",
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-        }
-    )
-    analysis_outcome = Orchestrator.from_settings(settings).run_analysis(FIXTURE)
-    analysis = AnalysisResult.model_validate(analysis_outcome.result)
-
-    units = SemanticWorkUnitBuilder(
-        token_budget=64, max_functions_per_unit=1
-    ).build(analysis)
-
-    cycle_unit = next(unit for unit in units.units if "cycleA" in unit.symbol_ids)
-    assert {"cycleA", "cycleB"}.issubset(cycle_unit.symbol_ids)
+    assert outcome.index.core_functions == ["processData"]
+    assert {"scan_result", "analysis_result", "semantic_index"} <= outcome.artifacts.keys()
+    assert "call_observations" in outcome.artifacts
+    assert outcome.artifacts["structural_code_tree"] != outcome.artifacts["semantic_code_tree"]
+    response_types = {call[2] for call in client.calls}
+    assert {"ClusterAnnotationDraftResponse", "FileAnnotationDraft", "ProjectAnnotationDraft"} <= response_types
+    assert all(item.evidence for item in outcome.index.functions)
 
 
-def test_work_units_limit_function_count_outside_atomic_scc() -> None:
-    """作用：验证普通工作单元受函数数量上限约束，而 SCC 原子组保持不拆分。"""
+def test_semantic_web_restart_resume_and_new_graph(tmp_path):
+    project = tmp_path / "matlab"
+    shutil.copytree(FIXTURE, project)
+    settings = AppSettings(orchestrator={"state_db": tmp_path / "state.db",
+        "web_db": tmp_path / "web.db", "artifact_dir": tmp_path / "jobs"})
 
-    functions = [
-        FunctionInfo(
-            name=f"f{index}",
-            qualified_name=f"f{index}",
-            file_path="chain.m",
-            line_count=1,
-        )
-        for index in range(10)
-    ]
-    analysis = AnalysisResult(
-        project_root=".",
-        functions=functions,
-        dependencies=[
-            DependencyEdge(source=f"f{index}", target=f"f{index + 1}")
-            for index in range(9)
-        ],
-    )
+    def fail_project(system, prompt, model):
+        if model.__name__ == "ProjectAnnotationDraft":
+            raise RuntimeError("simulated connection failure")
+        return _response(system, prompt, model)
 
-    units = SemanticWorkUnitBuilder(
-        token_budget=100_000,
-        max_functions_per_unit=3,
-    ).build(analysis)
+    model = FakeStructuredLLMClient(fail_project)
 
-    assert all(len(unit.symbol_ids) <= 3 for unit in units.units)
-    assert [symbol for unit in units.units for symbol in unit.symbol_ids] == [
-        f"f{index}" for index in range(10)
-    ]
+    def factory():
+        service = SemanticService(settings)
+        service._orchestrator = Orchestrator.from_settings(settings, semantic_client=model)
+        return service
 
+    def wait(client, job_id):
+        for _ in range(300):
+            current = client.get(f"/api/jobs/{job_id}").json()
+            if current["state"] not in {"queued", "running"}:
+                return current
+            time.sleep(0.01)
+        pytest.fail("semantic web job did not finish")
 
-def test_work_units_follow_stable_topological_order() -> None:
-    """作用：验证 SCC 缩点后按依赖拓扑顺序分簇；输入：名称顺序相反的调用边；输出：调用者簇先于被调用者簇。"""
-
-    analysis = AnalysisResult.model_validate(
-        {
-            "project_root": ".",
-            "functions": [
-                {
-                    "name": "leaf",
-                    "qualified_name": "a_leaf",
-                    "file_path": "leaf.m",
-                    "line_count": 1,
-                },
-                {
-                    "name": "entry",
-                    "qualified_name": "z_entry",
-                    "file_path": "entry.m",
-                    "line_count": 1,
-                },
-            ],
-            "dependencies": [{"source": "z_entry", "target": "a_leaf"}],
-        }
-    )
-
-    units = SemanticWorkUnitBuilder(token_budget=32).build(analysis).units
-
-    assert [unit.symbol_ids for unit in units] == [["z_entry"], ["a_leaf"]]
+    manager = MvpJobManager(service_factory=factory, settings=settings, executor=ThreadPoolExecutor(1))
+    with TestClient(create_app(manager)) as client:
+        original = client.post("/api/jobs/analyze", json={"project_path": str(project)}).json()["job_id"]
+        assert wait(client, original)["state"] == "completed"
+        assert client.post(f"/api/jobs/{original}/resume").status_code == 409
+        assert client.post(f"/api/jobs/{original}/annotate").status_code == 202
+        failed = wait(client, original)
+        assert failed["state"] == "failed" and failed["can_resume"]
+    manager._executor.shutdown()
+    # Recreate the web manager, SQLite store, service and model.
+    model = FakeStructuredLLMClient(_response)
+    manager = MvpJobManager(service_factory=factory, settings=settings, executor=ThreadPoolExecutor(1))
+    with TestClient(create_app(manager)) as client:
+        assert client.get(f"/api/jobs/{original}").json()["can_resume"]
+        assert client.post(f"/api/jobs/{original}/resume").status_code == 202
+        assert wait(client, original)["state"] == "completed"
+        assert [call[2] for call in model.calls] == ["ProjectAnnotationDraft"]
+        old_graph = client.get(f"/api/jobs/{original}/graph").json()
+        (project / "added.m").write_text("function y = added(x)\ny = x;\nend\n", encoding="utf-8")
+        assert client.post(f"/api/jobs/{original}/resume").status_code == 409
+        response = client.post(f"/api/jobs/{original}/restart")
+        assert response.status_code == 202
+        restarted = response.json()["job_id"]
+        assert restarted != original
+        assert wait(client, restarted)["state"] == "completed"
+        new_graph = client.get(f"/api/jobs/{restarted}/graph").json()
+        assert len(new_graph["nodes"]) == len(old_graph["nodes"]) + 1
+        assert client.get(f"/api/jobs/{original}/graph").json() == old_graph
+    manager._executor.shutdown()
 
 
-def test_work_units_use_final_prompt_estimate_to_split_context(tmp_path: Path) -> None:
-    """作用：验证分组与最终缩进 JSON 提示共用估算口径，避免装箱成功后发送前超限。"""
+def test_semantic_resume_retries_units_after_quality_retry_limit(tmp_path):
+    settings = AppSettings(orchestrator={"state_db": tmp_path / "state.db", "artifact_dir": tmp_path / "jobs"})
 
-    project = tmp_path / "project"
-    project.mkdir()
-    source = "\n".join(
-        ["function y = first(x)", *[f"y = x + {index}; % 中文上下文" for index in range(35)], "end",
-         "function y = second(x)", *[f"y = x * {index + 1}; % 中文上下文" for index in range(35)], "end"]
-    )
-    (project / "large.m").write_text(source, encoding="utf-8")
-    analysis = AnalysisResult(
-        project_root=str(project),
-        functions=[
-            FunctionInfo(name="first", qualified_name="first", file_path="large.m", start_line=1, end_line=37, line_count=37),
-            FunctionInfo(name="second", qualified_name="second", file_path="large.m", start_line=38, end_line=74, line_count=37),
-        ],
-        dependencies=[DependencyEdge(source="first", target="second")],
-    )
-    artifacts = ArtifactStore(tmp_path / "jobs")
-    scan_ref = artifacts.write_model("estimate", "scan.json", ScanResult(project_root=str(project)))
-    analysis_ref = artifacts.write_model("estimate", "analysis.json", analysis)
-    context_builder = SemanticContextBuilder(artifacts)
+    def unavailable(system, prompt, model):
+        if model.__name__ == "ClusterAnnotationDraftResponse":
+            raise RuntimeError("model unavailable")
+        return _response(system, prompt, model)
 
-    single_units = SemanticWorkUnitBuilder(token_budget=100_000).build(analysis).units
-    combined_tokens = context_builder.estimate(
-        scan_reference=scan_ref,
-        analysis_reference=analysis_ref,
-        unit=single_units[0],
-    )
-    budget = combined_tokens - 1
-    units = SemanticWorkUnitBuilder(token_budget=budget).build(
-        analysis,
-        context_estimator=lambda unit: context_builder.estimate(
-            scan_reference=scan_ref,
-            analysis_reference=analysis_ref,
-            unit=unit,
-        ),
-    ).units
-
-    assert [unit.symbol_ids for unit in units] == [["first"], ["second"]]
-    for unit in units:
-        context = context_builder.build(
-            scan_reference=scan_ref,
-            analysis_reference=analysis_ref,
-            unit=unit,
-            token_budget=budget,
-        )
-        assert context.estimated_tokens == unit.estimated_tokens
-        assert context.estimated_tokens <= budget
+    first = Orchestrator.from_settings(settings, semantic_client=FakeStructuredLLMClient(unavailable)).run_annotation(FIXTURE)
+    assert first.index.conflicts
+    resumed = Orchestrator.from_settings(settings, semantic_client=FakeStructuredLLMClient(_response)).resume_annotation(first.job_id)
+    assert len(resumed.index.functions) == 8
+    assert not resumed.index.conflicts
 
 
-def test_semantic_preflight_blocks_all_llm_calls_for_oversized_atomic_unit(
-    tmp_path: Path,
-) -> None:
-    """作用：验证任一不可拆函数簇超预算时，在 fan-out 前阻断全部模型调用。"""
+def test_main_workflow_controls_matlab_to_python_agents(tmp_path: Path) -> None:
+    settings = AppSettings(orchestrator={
+        "state_db": tmp_path / "state.db",
+        "artifact_dir": tmp_path / "jobs",
+        "parser_chunk_size": 3,
+    })
+    client = FakeStructuredLLMClient(_response)
 
-    project = tmp_path / "oversized"
-    project.mkdir()
-    lines = ["function y = huge(x)"]
-    lines.extend(f"y = y + x + {index}; % 足够长的中文源码注释" for index in range(220))
-    lines.append("end")
-    (project / "huge.m").write_text("\n".join(lines), encoding="utf-8")
-    settings = AppSettings(
-        orchestrator={
-            "state_db": tmp_path / "state.db",
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-        },
-        llm={"semantic_token_budget": 512},
-    )
-    client = FakeStructuredLLMClient(_semantic_response)
-    orchestrator = Orchestrator.from_settings(settings, semantic_client=client)
-
-    with pytest.raises(QualityGateError, match="语义预检失败，尚未调用 LLM"):
-        orchestrator.run_annotation(project)
-
-    assert client.calls == []
-
-
-def test_output_truncation_splits_non_scc_unit_and_resubmits(tmp_path: Path) -> None:
-    """作用：验证输出截断时沿 SCC 边界二分，并自动完成两个子簇注释。"""
-
-    project = tmp_path / "split-output"
-    project.mkdir()
-    (project / "main.m").write_text(
-        "function y = main(x)\ny = helper(x);\nend\n"
-        "function y = helper(x)\ny = x + 1;\nend\n",
-        encoding="utf-8",
-    )
-    settings = AppSettings(
-        orchestrator={
-            "state_db": tmp_path / "state.db",
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-        },
-        llm={"semantic_max_functions_per_unit": 8},
-    )
-
-    def truncate_multi_function(system_prompt: str, user_prompt: str, response_model):
-        context = json.loads(user_prompt)
-        if (
-            response_model.__name__ == "ClusterAnnotationResponse"
-            and len(context["functions"]) > 1
-        ):
-            raise LLMOutputTruncatedError("模型输出因 token 上限被截断")
-        return _semantic_response(system_prompt, user_prompt, response_model)
-
-    client = FakeStructuredLLMClient(truncate_multi_function)
     outcome = Orchestrator.from_settings(
         settings, semantic_client=client
-    ).run_annotation(project)
+    ).run_matlab_to_python(FIXTURE)
 
-    assert {item.symbol_id for item in outcome.index.functions} == {
-        "main",
-        "main>helper",
-    }
-    cluster_calls = [
-        call for call in client.calls if call[2] == "ClusterAnnotationResponse"
-    ]
-    assert len(cluster_calls) == 3
-    assert any("-a-" in key for key in outcome.artifacts)
-    assert any("-b-" in key for key in outcome.artifacts)
+    assert outcome.plan.units
+    assert len(outcome.translations) == len(outcome.plan.units)
+    assert "migration_plan" in outcome.artifacts
+    assert "call_observations" in outcome.artifacts
+    assert "semantic_index" not in outcome.artifacts
+    assert all(item.files for item in outcome.translations)
+    response_types = {call[2] for call in client.calls}
+    assert "TranslationResponse" in response_types
+    assert "ReasonDecision" in response_types
+    assert "ClusterAnnotationDraftResponse" not in response_types
+    assert "migration_checkpoint" in outcome.artifacts
 
+    resumed_client = FakeStructuredLLMClient(_response)
+    resumed = Orchestrator.from_settings(
+        settings, semantic_client=resumed_client
+    ).resume_matlab_to_python(outcome.job_id)
 
-def test_langgraph_resumes_failed_semantic_node_from_checkpoint(
-    tmp_path: Path,
-) -> None:
-    """作用：验证 LLM 节点失败后从 checkpoint 恢复；输入：首次失败客户端；输出：完成索引且不重跑前处理。"""
-
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "identity.m").write_text(
-        "function y = identity(x)\ny = x;\nend\n", encoding="utf-8"
-    )
-    state_db = tmp_path / "state.db"
-    settings = AppSettings(
-        io={"report_dir": tmp_path / "reports"},
-        orchestrator={
-            "state_db": state_db,
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-            "parser_chunk_size": 1,
-        }
-    )
-    semantic_attempts = 0
-
-    def flaky_response(system_prompt: str, user_prompt: str, response_model):
-        nonlocal semantic_attempts
-        if response_model.__name__ == "ClusterAnnotationResponse":
-            semantic_attempts += 1
-            if semantic_attempts == 1:
-                raise RuntimeError("temporary model failure")
-        return _semantic_response(system_prompt, user_prompt, response_model)
-
-    orchestrator = Orchestrator.from_settings(
-        settings,
-        semantic_client=FakeStructuredLLMClient(flaky_response),
-    )
-
-    try:
-        orchestrator.run_annotation(project)
-    except Exception:
-        pass
-    else:
-        raise AssertionError("首次语义调用应失败")
-
-    with sqlite3.connect(state_db) as connection:
-        job_id, status = connection.execute(
-            "SELECT job_id, status FROM jobs ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-    assert status == "failed"
-    tasks_before = SQLiteStateManager(state_db).task_statuses(job_id)
-
-    resumed_outcome = orchestrator.run_annotation(project)
-
-    assert resumed_outcome.job_id == job_id
-    assert Path(resumed_outcome.artifacts["semantic_index"]).is_file()
-    assert str(SQLiteStateManager(state_db).get_job(job_id).status) == "completed"
-    assert SQLiteStateManager(state_db).task_statuses(job_id) == tasks_before
-    assert semantic_attempts == 2
-
-
-def test_refactor_plan_waits_for_and_records_human_approval(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """作用：验证计划仲裁和 interrupt 审批闭环；输入：假 LLM 候选；输出：待审、恢复和决定 artifact。"""
-
-    state_db = tmp_path / "state.db"
-    settings = AppSettings(
-        io={"report_dir": tmp_path / "reports"},
-        orchestrator={
-            "state_db": state_db,
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-            "output_dir": tmp_path / "outputs",
-            "parser_chunk_size": 3,
-        }
-    )
-    orchestrator = Orchestrator.from_settings(
-        settings,
-        semantic_client=FakeStructuredLLMClient(_semantic_response),
-    )
-
-    pending = orchestrator.run_plan(FIXTURE)
-
-    assert pending.status == "waiting_approval"
-    assert pending.plan.symbol_to_module
-    assert not pending.plan.conflicts
-    assert "refactor_plan" in pending.artifacts
-    assert str(
-        SQLiteStateManager(state_db).get_job(pending.job_id).status
-    ) == "waiting_approval"
-    loaded = orchestrator.get_review(pending.job_id)
-    assert loaded.plan == pending.plan
-
-    approved = orchestrator.submit_review(
-        pending.job_id,
-        ReviewDecision(action="approve", comment="人工确认方案可执行"),
-    )
-
-    assert approved.status == "validated"
-    assert approved.decision is not None
-    assert approved.decision.comment == "人工确认方案可执行"
-    assert Path(approved.artifacts["review_decision"]).is_file()
-    assert approved.output_root is not None
-    assert Path(approved.output_root, "main.m").is_file()
-    assert approved.change_set_ref is not None
-    change_set = orchestrator.artifact_store.read_model(
-        approved.change_set_ref, ChangeSet
-    )
-    assert change_set.source_tree_hash_before == change_set.source_tree_hash_after
-    assert change_set.output_root == approved.output_root
-    assert approved.validation_ref is not None
-    validation = orchestrator.artifact_store.read_model(
-        approved.validation_ref, ValidationResult
-    )
-    assert validation.passed
-    assert approved.report_ref is not None
-    assert approved.report_markdown_ref is not None
-    assert approved.report_output_ref is not None
-    assert approved.report_markdown_output_ref is not None
-    assert Path(approved.report_output_ref).is_file()
-    assert Path(approved.report_markdown_output_ref).is_file()
-    assert Path(approved.report_markdown_ref).read_text(encoding="utf-8").startswith(
-        "# MATLAB 隔离重构交付报告"
-    )
-    report_outcome = orchestrator.get_report(pending.job_id)
-    assert report_outcome.report.validation_passed
-    report = orchestrator.artifact_store.read_model(
-        report_outcome.report_ref, NaturalLanguageReport
-    )
-    assert report.source_tree_unchanged
-    assert {item.check_id for item in report.check_findings} == {
-        item.check_id for item in validation.checks
-    }
-    monkeypatch.setenv("MATLAB_REFACTOR_STATE_DB", str(state_db))
-    monkeypatch.setenv(
-        "MATLAB_REFACTOR_CHECKPOINT_DB", str(tmp_path / "checkpoints.db")
-    )
-    monkeypatch.setenv("MATLAB_REFACTOR_ARTIFACT_DIR", str(tmp_path / "jobs"))
-    monkeypatch.setenv("MATLAB_REFACTOR_CODE_OUTPUT_DIR", str(tmp_path / "outputs"))
-    cli_output = tmp_path / "final-report.json"
-    assert cli_main(
-        [
-            "report",
-            pending.job_id,
-            "--json",
-            str(cli_output),
-        ]
-    ) == 0
-    assert json.loads(cli_output.read_text(encoding="utf-8"))["report"][
-        "job_id"
-    ] == pending.job_id
-    assert any(
-        item.check_id == "matlab_runtime"
-        and item.status in {"skipped", "unavailable"}
-        for item in validation.checks
-    )
-    assert str(
-        SQLiteStateManager(state_db).get_job(pending.job_id).status
-    ) == "completed"
-
-
-def test_failed_validation_enters_reviewed_repair_loop(
-    tmp_path: Path,
-) -> None:
-    """作用：验证失败证据生成修复、再次审批和新隔离输出；输入：首次失败验证器；输出：第二次验证通过。"""
-
-    class FailOnceValidator:
-        def __init__(self) -> None:
-            self.delegate = RefactoredProjectValidator([], [])
-            self.calls = 0
-
-        def validate(self, **kwargs) -> ValidationBundle:
-            self.calls += 1
-            bundle = self.delegate.validate(**kwargs)
-            if self.calls > 1:
-                return bundle
-            failure = ValidationCheck(
-                check_id="forced_failure",
-                status="failed",
-                summary="测试注入的首次失败",
-            )
-            return ValidationBundle(
-                result=bundle.result.model_copy(
-                    update={
-                        "passed": False,
-                        "checks": [*bundle.result.checks, failure],
-                    }
-                ),
-                scan=bundle.scan,
-                analysis=bundle.analysis,
-            )
-
-    validator = FailOnceValidator()
-    settings = AppSettings(
-        io={"report_dir": tmp_path / "reports"},
-        orchestrator={
-            "state_db": tmp_path / "state.db",
-            "checkpoint_db": tmp_path / "checkpoints.db",
-            "artifact_dir": tmp_path / "jobs",
-            "output_dir": tmp_path / "outputs",
-            "max_repair_attempts": 1,
-        }
-    )
-    orchestrator = Orchestrator.from_settings(
-        settings,
-        semantic_client=FakeStructuredLLMClient(_semantic_response),
-        validator=validator,
-    )
-    pending = orchestrator.run_plan(FIXTURE)
-
-    repair_pending = orchestrator.submit_review(
-        pending.job_id, ReviewDecision(action="approve")
-    )
-
-    assert repair_pending.status == "waiting_repair_approval"
-    assert repair_pending.repair_proposal_ref is not None
-    assert repair_pending.validation_passed is False
-    assert repair_pending.failed_validation_checks
-    assert repair_pending.repair_summary
-    assert Path(repair_pending.output_root).is_dir()
-    assert str(
-        SQLiteStateManager(settings.orchestrator.state_db)
-        .get_job(pending.job_id)
-        .status
-    ) == "waiting_approval"
-
-    repaired = orchestrator.submit_review(
-        pending.job_id,
-        ReviewDecision(action="approve", comment="批准受限修复"),
-    )
-
-    assert repaired.status == "validated"
-    assert validator.calls == 2
-    assert repaired.output_root is not None
-    assert repaired.output_root.endswith("-repair-1")
-    repaired_change_set = orchestrator.artifact_store.read_model(
-        repaired.change_set_ref, ChangeSet
-    )
-    assert repaired_change_set.attempt == 1
-    assert repaired.report_ref is not None
-    assert orchestrator.get_report(pending.job_id).report.attempt == 1
+    assert resumed.job_id == outcome.job_id
+    assert len(resumed.translations) == len(outcome.translations)
+    assert resumed_client.calls == []

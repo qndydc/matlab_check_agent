@@ -22,7 +22,6 @@ def test_orchestrator_persists_worker_pipeline(tmp_path: Path) -> None:
     settings = AppSettings(
         orchestrator={
             "state_db": database,
-            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": artifact_dir,
             "parser_chunk_size": 3,
         }
@@ -50,6 +49,7 @@ def test_orchestrator_persists_worker_pipeline(tmp_path: Path) -> None:
     ) == 3
     assert Path(outcome.artifacts["scan_result"]).is_file()
     assert Path(outcome.artifacts["analysis_result"]).is_file()
+    assert Path(outcome.artifacts["code_tree"]).is_file()
     assert outcome.result.dependencies
     assert ["cycleA", "cycleB"] in outcome.result.cycles
 
@@ -63,7 +63,6 @@ def test_orchestrator_scan_runs_scanner_parser_fanout_and_aggregate(
     settings = AppSettings(
         orchestrator={
             "state_db": database,
-            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": tmp_path / "jobs",
             "parser_chunk_size": 3,
         }
@@ -91,7 +90,6 @@ def test_status_command_reads_persisted_job(tmp_path: Path, monkeypatch) -> None
     settings = AppSettings(
         orchestrator={
             "state_db": database,
-            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": artifact_dir,
         }
     )
@@ -113,7 +111,6 @@ def test_empty_project_still_runs_parser_aggregate(tmp_path: Path) -> None:
     settings = AppSettings(
         orchestrator={
             "state_db": database,
-            "checkpoint_db": tmp_path / "checkpoints.db",
             "artifact_dir": tmp_path / "jobs",
             "parser_chunk_size": 2,
         }

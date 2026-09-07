@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+
+FROM node:22-alpine AS frontend-builder
+WORKDIR /build/apps/migration/frontend
+RUN corepack enable && corepack prepare pnpm@11.22.0 --activate
+COPY apps/migration/frontend/package.json apps/migration/frontend/pnpm-lock.yaml apps/migration/frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY apps/migration/frontend/ ./
+COPY apps/shared/ ../../shared/
+RUN pnpm build
+
+FROM python:3.11-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MATLAB_MIGRATION_FRONTEND_DIR=/app/apps/migration/frontend/dist
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+RUN python -m pip install --no-cache-dir .
+COPY --from=frontend-builder /build/apps/migration/frontend/dist ./apps/migration/frontend/dist
+EXPOSE 8001
+CMD ["uvicorn", "matlab_refactor_agent.apps.migration.backend.app:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
