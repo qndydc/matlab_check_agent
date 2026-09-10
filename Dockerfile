@@ -21,8 +21,8 @@ RUN python -m pip install --no-cache-dir .
 
 COPY --from=frontend-builder /build/apps/semantic/frontend/dist ./apps/semantic/frontend/dist
 
-RUN groupadd --system matlab-atlas \
-    && useradd --system --gid matlab-atlas --home-dir /app matlab-atlas \
+RUN groupadd --system --gid 10001 matlab-atlas \
+    && useradd --system --uid 10001 --gid matlab-atlas --home-dir /app matlab-atlas \
     && mkdir -p /data /projects \
     && chown -R matlab-atlas:matlab-atlas /app /data
 

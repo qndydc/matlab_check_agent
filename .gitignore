@@ -17,6 +17,12 @@ node_modules/
 var/
 .idea/
 .vscode/
-tests/fixtures/matlab_projects/
+tests/unit/
 projects/
 tests/fixtures/
+
+
+.exe
+.sha256
+.test-tmp
+packaging/
