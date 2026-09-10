@@ -15,7 +15,31 @@ MATLAB Atlas 是一个面向中大型 MATLAB 代码库的代码理解与迁移�
 
 ## 快速开始
 
-### 方式一：从 GitHub 安装源码
+### 方式一：Windows 免安装单文件版（最快体验）
+
+Windows 10/11 x64 用户可以直接下载发布页中的：
+
+```text
+MATLAB-Atlas-v0.1.0-win-x64.exe
+MATLAB-Atlas-v0.1.0-win-x64.exe.sha256
+```
+
+将 `.exe`、`.env` 和 `data/` 放在同一目录，校验 SHA256 后直接双击 `.exe`，无需安装和管理员权限。首次只复制 `.exe` 也可以：程序会在旁边自动创建 `.env`、`data/` 和 `logs/`。启动后请保持状态控制台开启；程序会自动打开前端，按 `Ctrl+C` 或关闭控制台即可停止。目标电脑不需要安装 Python、Node.js、pnpm 或 Docker：
+
+- Semantic App：`http://127.0.0.1:8000`
+- Migration App：`http://127.0.0.1:8001`
+
+程序只监听本机地址，适合一台电脑由一个用户使用。模型配置、API Key、SQLite、日志和任务产物都保存在 `.exe` 同目录；更新时只替换 `.exe`，不要覆盖 `.env` 和 `data/`。完全断网时，普通静态分析仍可使用；三级语义和 Python 迁移需要配置可访问的内网模型 API。
+
+如需自行构建，请在 Windows PowerShell 中安装 Node.js 22、pnpm 和 Python 3.10+，然后运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/windows/build.ps1
+```
+
+单文件版、`.env` 模板、数据目录和校验文件均生成在 `build/windows/dist/`，复制该目录到另一台 Windows 电脑即可使用。
+
+### 方式二：从 GitHub 安装源码
 
 环境要求：Python 3.10+、Node.js 22（推荐）和 pnpm。
 
@@ -65,7 +89,7 @@ matlab-migration-web
 pnpm --dir apps/migration/frontend dev --host 127.0.0.1 --port 5174 --strictPort
 ```
 
-### 方式二：Docker Compose
+### 方式三：Docker Compose
 
 Docker 版本把每个应用的前端和后端合并在一个镜像中，不需要在部署机安装 Python、Node.js 或 pnpm。
 

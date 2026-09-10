@@ -19,3 +19,4 @@ var/
 .vscode/
 tests/fixtures/matlab_projects/
 projects/
+tests/fixtures/
