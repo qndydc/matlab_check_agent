@@ -21,6 +21,25 @@ export interface JobStatus {
   can_resume: boolean
   created_at: string
   updated_at: string
+  project_id: string | null
+}
+
+export interface EmployeeSession {
+  employee_id: string
+  administrator: boolean
+}
+
+export interface SourceProject {
+  project_id: string
+  employee_id: string
+  original_filename: string
+  source_type: 'zip'
+  storage_path: string
+  upload_bytes: number
+  unpacked_bytes: number | null
+  sha256: string
+  state: 'uploading' | 'extracting' | 'ready' | 'failed'
+  created_at: string
 }
 
 export interface GraphNodeData {

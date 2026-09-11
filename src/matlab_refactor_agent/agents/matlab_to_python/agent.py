@@ -21,6 +21,7 @@ from matlab_refactor_agent.domain.migration import (
 from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
 from matlab_refactor_agent.infrastructure.llm.client import StreamProgressSink
 from matlab_refactor_agent.orchestration.call_lifecycle import ObservationSink
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 
 from .context_builder import TranslationContextBuilder
 
@@ -74,7 +75,8 @@ class MatlabToPythonAgent(BaseAgent):
             )
             prompt = translation_context.model_dump_json(indent=2)
             evidence = [item.source_hash for item in translation_context.functions]
-        response = self._client.complete(
+        response = global_heavy_pool.run(
+            self._client.complete,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
             response_model=TranslationResponse,

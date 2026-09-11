@@ -91,11 +91,11 @@ pnpm --dir apps/migration/frontend dev --host 127.0.0.1 --port 5174 --strictPort
 
 ### 方式三：Docker Compose
 
-Docker 版本把每个应用的前端和后端合并在一个镜像中，不需要在部署机安装 Python、Node.js 或 pnpm。
+Docker 版本把两个前端、两个 API 和统一任务池放在一个应用进程中，由 Nginx 对外提供 8000/8001。部署机不需要安装 Python、Node.js 或 pnpm。
 
 ```powershell
 Copy-Item .env.docker.example .env
-# 编辑 .env，至少设置 MATLAB_PROJECTS_PATH 和 MATLAB_DATA_PATH
+# 编辑 .env，至少设置数据目录和管理员工号
 docker compose up -d --build
 ```
 
@@ -104,46 +104,11 @@ docker compose up -d --build
 - Semantic App：`http://127.0.0.1:8000`
 - Migration App：`http://127.0.0.1:8001`
 
-项目目录既可以输入 Windows 宿主机路径（例如 `D:\MATLAB\projects\demo`），也可以输入容器路径（例如 `/projects/demo`）。模型配置可以在两个应用右上角的“设置”中修改，并持久化到宿主机的 `MATLAB_DATA_PATH/config/.env`。
+首次进入页面输入工号，上传 MATLAB 项目的 ZIP 后即可分析；服务器无需访问用户电脑或其他代码服务器。只有 `MATLAB_ADMIN_EMPLOYEE_IDS` 指定的工号能够修改全局模型设置。
 
-每次发布版本后，项目计划同步更新 GitHub Container Registry（GHCR）中的两个镜像：
+当前 Compose 使用一个 `matlab-atlas:0.1.0` 应用镜像和一个 Nginx 镜像。正式发布到 GHCR 时应发布统一应用镜像；升级前请先备份数据目录。
 
-```text
-ghcr.io/qndydc/matlab-check-agent-semantic:<version>
-ghcr.io/qndydc/matlab-check-agent-migration:<version>
-```
-
-首次 GHCR 发布完成后，可以不下载源码，直接运行镜像。下面以 Windows PowerShell 和 `0.1.0` 为例；请先在仓库 **Packages** 页面确认该标签存在：
-
-```powershell
-New-Item -ItemType Directory -Force D:\MATLAB\projects,D:\MATLAB\matlab-atlas-data
-
-docker run -d --name matlab-semantic-app --restart unless-stopped `
-  -p 8000:8000 `
-  -e MATLAB_REFACTOR_ENV_FILE=/data/config/.env `
-  -e MATLAB_PROJECTS_HOST_PATH=D:/MATLAB/projects `
-  -e MATLAB_REFACTOR_ARTIFACT_DIR=/data/jobs `
-  -e MATLAB_REFACTOR_STATE_DB=/data/refactor-agent.db `
-  -e MATLAB_REFACTOR_WEB_DB=/data/web-projects.db `
-  -v D:/MATLAB/projects:/projects:ro `
-  -v D:/MATLAB/matlab-atlas-data:/data `
-  ghcr.io/qndydc/matlab-check-agent-semantic:0.1.0
-
-docker run -d --name matlab-migration-app --restart unless-stopped `
-  -p 8001:8001 `
-  -e MATLAB_REFACTOR_ENV_FILE=/data/config/.env `
-  -e MATLAB_PROJECTS_HOST_PATH=D:/MATLAB/projects `
-  -e MATLAB_REFACTOR_ARTIFACT_DIR=/data/jobs `
-  -e MATLAB_REFACTOR_STATE_DB=/data/refactor-agent.db `
-  -e MATLAB_REFACTOR_WEB_DB=/data/web-projects.db `
-  -v D:/MATLAB/projects:/projects:ro `
-  -v D:/MATLAB/matlab-atlas-data:/data `
-  ghcr.io/qndydc/matlab-check-agent-migration:0.1.0
-```
-
-镜像尚未出现在 Packages 页面时，请使用前面的 `docker compose up -d --build` 源码构建方式。正式部署建议固定版本号；`latest` 适合体验新版本，但更新前仍应备份数据目录。
-
-Windows、外网和断网内网的完整部署步骤见 [Docker 部署指南](docs/docker-windows.md)。
+Windows、联网 Linux、断网内网、备份、升级和回滚步骤见 [Docker 部署指南](docs/docker-deployment.md)。
 
 ## CLI 使用
 

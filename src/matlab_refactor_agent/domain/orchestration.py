@@ -23,9 +23,9 @@ def utc_now() -> datetime:
 
 
 def new_job_id() -> str:
-    """作用：生成可排序的本地绝对时间 Job ID；输入：系统时钟；输出：年月日时分秒及微秒数字串。"""
+    """生成可排序且跨用户/进程低碰撞的 Job ID。"""
 
-    return datetime.now().astimezone().strftime("%Y%m%d%H%M%S%f")
+    return f"{datetime.now().astimezone():%Y%m%d%H%M%S%f}{uuid4().hex[:8]}"
 
 
 class TaskEnvelope(DomainModel):

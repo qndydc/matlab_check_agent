@@ -14,18 +14,18 @@ import dagre from 'dagre'
 import {
   AlertTriangle, ArrowDownToLine, ArrowUpFromLine, Braces, ChevronDown, ChevronRight, CircleDot,
   Database, FileCode2, FolderTree, History, LoaderCircle, Network, Play,
-  RotateCcw, Search, Settings, Sparkles, Trash2, X,
+  RotateCcw, Search, Settings, Sparkles, Trash2, Upload, X,
 } from 'lucide-react'
 import { api } from './api'
 import { ModelSettings } from '../../../shared/ModelSettings'
 import type {
   FileAnnotation, FunctionAnnotation, GraphDirection, GraphDocument, GraphNodeData,
   FunctionSource, GraphScope, GraphViewDocument, JobStatus, SemanticIndex,
-  SemanticProgressEvent,
+  SemanticProgressEvent, SourceProject,
 } from './types'
 
-const LAST_JOB_KEY = 'matlab-atlas:last-job'
-const VIEW_KEY_PREFIX = 'matlab-atlas:view:'
+const lastJobKey = (employeeId: string) => `matlab-atlas:${employeeId}:last-job`
+const viewKey = (employeeId: string, jobId: string) => `matlab-atlas:${employeeId}:view:${jobId}`
 type Selection = { type: 'project' } | { type: 'file'; id: string } | { type: 'function'; id: string }
 type ViewState = { scope: GraphScope; focusId: string | null; depth: number; limit: number; direction: GraphDirection }
 const DEFAULT_VIEW: ViewState = { scope: 'project', focusId: null, depth: 1, limit: 80, direction: 'both' }
@@ -91,9 +91,9 @@ function layoutGraph(graph: GraphViewDocument): { nodes: Node[]; edges: Edge[] }
 }
 
 /** 从本地存储读取某个任务最后一次使用的图层级和焦点。 */
-function restoreViewState(jobId: string): ViewState {
+function restoreViewState(employeeId: string, jobId: string): ViewState {
   try {
-    const saved = JSON.parse(localStorage.getItem(`${VIEW_KEY_PREFIX}${jobId}`) || 'null') as Partial<ViewState> | null
+    const saved = JSON.parse(localStorage.getItem(viewKey(employeeId, jobId)) || 'null') as Partial<ViewState> | null
     if (!saved?.scope) return DEFAULT_VIEW
     return { ...DEFAULT_VIEW, ...saved }
   } catch { return DEFAULT_VIEW }
@@ -121,6 +121,14 @@ function DetailSection({ title, items }: { title: string; items: string[] }) {
 /** 组合整个 MVP 页面，管理任务、数据、选择状态以及三个主面板。 */
 export default function App() {
   const [projectPath, setProjectPath] = useState('')
+  const [employeeId, setEmployeeId] = useState<string | null>(null)
+  const [administrator, setAdministrator] = useState(false)
+  const [loginInput, setLoginInput] = useState('')
+  const [sessionChecked, setSessionChecked] = useState(false)
+  const [sourceProjects, setSourceProjects] = useState<SourceProject[]>([])
+  const [sourceProjectId, setSourceProjectId] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [job, setJob] = useState<JobStatus | null>(null)
   const [graph, setGraph] = useState<GraphDocument | null>(null)
   const [graphView, setGraphView] = useState<GraphViewDocument | null>(null)
@@ -152,22 +160,22 @@ export default function App() {
     const result = await api.graphView(jobId, next)
     setGraphView(result)
     setViewState(next)
-    localStorage.setItem(`${VIEW_KEY_PREFIX}${jobId}`, JSON.stringify(next))
-  }, [])
+    if (employeeId) localStorage.setItem(viewKey(employeeId, jobId), JSON.stringify(next))
+  }, [employeeId])
 
   /** 根据任务就绪标记加载完整索引、当前图视图和三级注释结果。 */
   const loadResults = useCallback(async (current: JobStatus) => {
     if (!current.graph_ready) {
       setGraph(null); setGraphView(null); setSemantics(null); return
     }
-    const restoredView = restoreViewState(current.job_id)
+    const restoredView = restoreViewState(employeeId || 'local', current.job_id)
     const [fullGraph, visibleGraph, semanticIndex] = await Promise.all([
       api.graph(current.job_id),
       api.graphView(current.job_id, restoredView),
       current.semantics_ready ? api.semantics(current.job_id) : Promise.resolve(null),
     ])
     setGraph(fullGraph); setGraphView(visibleGraph); setViewState(restoredView); setSemantics(semanticIndex)
-  }, [])
+  }, [employeeId])
 
   /** 从后端读取全部持久化项目，并刷新历史项目列表。 */
   const refreshProjects = useCallback(async () => {
@@ -175,17 +183,31 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    api.health().then(() => {
-      setServiceOnline(true)
-      return refreshProjects()
-    }).catch(() => setServiceOnline(false))
-    const lastJob = localStorage.getItem(LAST_JOB_KEY)
+    api.session()
+      .then((session) => {
+        setEmployeeId(session.employee_id)
+        setAdministrator(session.administrator)
+      })
+      .catch(() => setEmployeeId(null))
+      .finally(() => setSessionChecked(true))
+  }, [])
+
+  useEffect(() => {
+    if (!employeeId) return
+    Promise.all([api.health(), refreshProjects(), api.sourceProjects()])
+      .then(([, , uploaded]) => {
+        setServiceOnline(true)
+        setSourceProjects(uploaded)
+        if (!sourceProjectId && uploaded[0]) setSourceProjectId(uploaded[0].project_id)
+      })
+      .catch(() => setServiceOnline(false))
+    const lastJob = localStorage.getItem(lastJobKey(employeeId))
     if (lastJob) {
       api.job(lastJob).then(async (restored) => {
         setJob(restored); setProjectPath(restored.project_path); await loadResults(restored)
-      }).catch(() => localStorage.removeItem(LAST_JOB_KEY))
+      }).catch(() => localStorage.removeItem(lastJobKey(employeeId)))
     }
-  }, [loadResults, refreshProjects])
+  }, [employeeId, loadResults, refreshProjects])
 
   useEffect(() => {
     if (!job || !busy) return
@@ -279,13 +301,24 @@ export default function App() {
 
   /** 提交普通项目分析任务，并清空上一个项目的页面状态。 */
   async function startAnalysis() {
-    if (!projectPath.trim()) { setNotice('请先输入 MATLAB 项目路径'); return }
+    if (!sourceProjectId) { setNotice('请先上传并选择 MATLAB 项目 ZIP'); return }
     try {
       setNotice(null); setGraph(null); setGraphView(null); setSemantics(null); setSemanticEvents([]); setSelection({ type: 'project' }); setViewState(DEFAULT_VIEW)
-      const created = await api.analyze(projectPath.trim())
-      setJob(created); localStorage.setItem(LAST_JOB_KEY, created.job_id)
+      const created = await api.analyze(sourceProjectId)
+      setJob(created)
+      if (employeeId) localStorage.setItem(lastJobKey(employeeId), created.job_id)
       await refreshProjects()
     } catch (error) { setNotice((error as Error).message) }
+  }
+
+  async function uploadProject(file: File) {
+    try {
+      setUploading(true); setUploadProgress(0); setNotice(null)
+      const uploaded = await api.uploadProject(file, setUploadProgress)
+      const available = await api.sourceProjects()
+      setSourceProjects(available); setSourceProjectId(uploaded.project_id)
+    } catch (error) { setNotice((error as Error).message) }
+    finally { setUploading(false); setUploadProgress(0) }
   }
 
   /** 为当前已完成普通分析的任务启动三级语义注释。 */
@@ -311,7 +344,8 @@ export default function App() {
         setGraph(null); setGraphView(null); setSemanticEvents([])
         setSelection({ type: 'project' }); setViewState(DEFAULT_VIEW)
       }
-      setJob(next); localStorage.setItem(LAST_JOB_KEY, next.job_id)
+      setJob(next)
+      if (employeeId) localStorage.setItem(lastJobKey(employeeId), next.job_id)
       await refreshProjects()
     } catch (error) { setNotice((error as Error).message) }
   }
@@ -350,7 +384,7 @@ export default function App() {
       setNotice(null)
       const restored = await api.job(saved.job_id)
       setJob(restored); setProjectPath(restored.project_path); setSelection({ type: 'project' })
-      localStorage.setItem(LAST_JOB_KEY, restored.job_id)
+      if (employeeId) localStorage.setItem(lastJobKey(employeeId), restored.job_id)
       await loadResults(restored)
       setHistoryOpen(false)
     } catch (error) { setNotice((error as Error).message) }
@@ -363,11 +397,43 @@ export default function App() {
       await api.deleteProject(saved.job_id)
       if (job?.job_id === saved.job_id) {
         setJob(null); setGraph(null); setGraphView(null); setSemantics(null); setSemanticEvents([]); setSelection({ type: 'project' })
-        localStorage.removeItem(LAST_JOB_KEY)
-        localStorage.removeItem(`${VIEW_KEY_PREFIX}${saved.job_id}`)
+        if (employeeId) {
+          localStorage.removeItem(lastJobKey(employeeId))
+          localStorage.removeItem(viewKey(employeeId, saved.job_id))
+        }
       }
       await refreshProjects()
     } catch (error) { setNotice((error as Error).message) }
+  }
+
+  async function login() {
+    try {
+      const session = await api.login(loginInput.trim())
+      setEmployeeId(session.employee_id)
+      setAdministrator(session.administrator)
+      setNotice(null)
+    } catch (error) { setNotice((error as Error).message) }
+  }
+
+  async function downloadCurrentJob() {
+    if (!job) return
+    try {
+      await api.exportJob(job.job_id)
+      window.location.assign(`/api/jobs/${encodeURIComponent(job.job_id)}/download`)
+    } catch (error) { setNotice((error as Error).message) }
+  }
+
+  if (!sessionChecked) {
+    return <main className="login-screen"><div className="login-card"><LoaderCircle className="spin" />正在连接服务器…</div></main>
+  }
+  if (!employeeId) {
+    return <main className="login-screen"><form className="login-card" onSubmit={(event) => { event.preventDefault(); void login() }}>
+      <div className="brand-mark"><Braces size={22} /></div><h1>MATLAB Atlas</h1>
+      <p>请输入工号。首次使用会自动创建个人数据空间。</p>
+      <input autoFocus aria-label="工号" value={loginInput} onChange={(event) => setLoginInput(event.target.value)} placeholder="例如：E001" />
+      <button className="primary" disabled={!loginInput.trim()}>进入工作台</button>
+      {notice && <span className="login-error">{notice}</span>}
+    </form></main>
   }
 
   const selectedNode = selection.type === 'function' ? graph?.nodes.find((node) => node.id === selection.id) : undefined
@@ -383,10 +449,30 @@ export default function App() {
         <div className="brand"><div className="brand-mark"><Braces size={20} /></div><div><strong>MATLAB Atlas</strong><span>代码结构与语义地图</span></div></div>
         <div className="path-control">
           <FolderTree size={17} />
-          <input aria-label="MATLAB 项目路径" title="支持 Windows 宿主机路径和 Docker/Linux 路径" placeholder="Windows: D:\projects\signal · Docker/Linux: /projects/signal" value={projectPath} onChange={(event) => setProjectPath(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && !busy && startAnalysis()} />
-          <button className="primary" onClick={startAnalysis} disabled={busy}><Play size={16} />项目静态分析</button>
+          <select aria-label="已上传项目" value={sourceProjectId} onChange={(event) => setSourceProjectId(event.target.value)}>
+            <option value="">选择已上传的 MATLAB 项目</option>
+            {sourceProjects.filter((item) => item.state === 'ready').map((item) =>
+              <option key={item.project_id} value={item.project_id}>{item.original_filename}</option>)}
+          </select>
+          <label className="upload-button"><Upload size={15} />{uploading ? uploadProgress < 100 ? `上传 ${uploadProgress}%` : '解压中…' : '上传 ZIP'}
+            <input type="file" accept=".zip,application/zip" disabled={uploading || busy} onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) void uploadProject(file)
+              event.target.value = ''
+            }} />
+          </label>
+          <button className="history-button" disabled={!sourceProjectId || busy} onClick={async () => {
+            if (!window.confirm('确认删除这个已上传项目吗？')) return
+            try {
+              await api.deleteSourceProject(sourceProjectId)
+              const remaining = await api.sourceProjects()
+              setSourceProjects(remaining)
+              setSourceProjectId(remaining[0]?.project_id || '')
+            } catch (error) { setNotice((error as Error).message) }
+          }}>删除上传</button>
+          <button className="primary" onClick={startAnalysis} disabled={busy || !sourceProjectId}><Play size={16} />项目静态分析</button>
         </div>
-        <div className="top-actions"><button className="history-button" onClick={() => setSettingsOpen(true)}><Settings size={15} />设置</button><button className="history-button" onClick={() => setHistoryOpen(true)}><History size={15} />历史项目</button><div className={`service ${serviceOnline ? 'online' : serviceOnline === false ? 'offline' : ''}`}><span />{serviceOnline ? '服务已连接' : serviceOnline === false ? '服务未连接' : '连接中'}</div></div>
+        <div className="top-actions"><button className="history-button" disabled={!job} onClick={downloadCurrentJob}>下载结果</button>{administrator && <button className="history-button" onClick={() => setSettingsOpen(true)}><Settings size={15} />设置</button>}<button className="history-button" onClick={() => setHistoryOpen(true)}><History size={15} />历史项目</button><div className={`service ${serviceOnline ? 'online' : serviceOnline === false ? 'offline' : ''}`}><span />{employeeId} · {serviceOnline ? '已连接' : serviceOnline === false ? '离线' : '连接中'}</div></div>
       </header>
 
       <section className="execution-actions" aria-label="语义任务执行方式">
@@ -449,7 +535,7 @@ export default function App() {
               else if (item?.node_type === 'function') navigateView('function', item.id)
             }}>
             <Background color="#ded9cc" gap={24} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
-          </ReactFlow>{graphView.truncated && <div className="graph-limit"><AlertTriangle size={14} />当前仅显示 {graphView.visible_nodes} / {graphView.total_nodes} 个节点，请搜索或聚焦后继续探索。</div>}</> : <div className="hero-empty"><div className="orb"><Network size={46} /></div><span className="eyebrow">PROJECT STATIC ANALYSIS</span><h1>看清代码如何流动</h1><p>执行项目静态分析，生成可供迁移复用的调用关系、循环依赖与核心入口。</p><button className="primary large" onClick={startAnalysis} disabled={busy || !projectPath.trim()}><Play size={17} />开始项目静态分析</button></div>}
+          </ReactFlow>{graphView.truncated && <div className="graph-limit"><AlertTriangle size={14} />当前仅显示 {graphView.visible_nodes} / {graphView.total_nodes} 个节点，请搜索或聚焦后继续探索。</div>}</> : <div className="hero-empty"><div className="orb"><Network size={46} /></div><span className="eyebrow">PROJECT STATIC ANALYSIS</span><h1>看清代码如何流动</h1><p>上传并选择 MATLAB 项目，生成可供迁移复用的调用关系、循环依赖与核心入口。</p><button className="primary large" onClick={startAnalysis} disabled={busy || !sourceProjectId}><Play size={17} />开始项目静态分析</button></div>}
         </section>
 
         <aside className="detail-panel panel">

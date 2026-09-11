@@ -15,8 +15,9 @@ import re
 import tempfile
 from threading import RLock
 import time
+from collections.abc import Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from dotenv.parser import parse_stream
@@ -234,7 +235,11 @@ class _PrivateSettingsRoute(APIRoute):
         return handle
 
 
-def install_model_settings_routes(api: FastAPI, env_file: Path | None = None) -> None:
+def install_model_settings_routes(
+    api: FastAPI,
+    env_file: Path | None = None,
+    administrator: Callable[..., str] | None = None,
+) -> None:
     store = ModelSettingsStore(env_file_path(env_file))
     router = APIRouter(prefix="/api/settings", route_class=_PrivateSettingsRoute)
 
@@ -243,7 +248,10 @@ def install_model_settings_routes(api: FastAPI, env_file: Path | None = None) ->
         return store.read()
 
     @router.put("/llm")
-    def update_settings(request: SettingsUpdate) -> dict:
+    def update_settings(
+        request: SettingsUpdate,
+        _administrator: str | None = Depends(administrator) if administrator else None,
+    ) -> dict:
         return store.update(request)
 
     # 兼容旧版只修改模型名称的调用方，统一复用同一个安全存储。
@@ -256,7 +264,10 @@ def install_model_settings_routes(api: FastAPI, env_file: Path | None = None) ->
         return legacy_view(store.read())
 
     @router.put("/model")
-    def update_model(request: LegacyModelUpdate) -> dict:
+    def update_model(
+        request: LegacyModelUpdate,
+        _administrator: str | None = Depends(administrator) if administrator else None,
+    ) -> dict:
         return legacy_view(store.update(SettingsUpdate(values={"model": request.model})))
 
     api.include_router(router)

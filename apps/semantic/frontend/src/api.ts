@@ -7,7 +7,8 @@
  */
 import type {
   FunctionSource, GraphDocument, GraphViewDocument, GraphViewRequest, JobStatus,
-  SemanticIndex, SemanticProgressEvent, SemanticStreamTerminal,
+  EmployeeSession, SemanticIndex, SemanticProgressEvent, SemanticStreamTerminal,
+  SourceProject,
 } from './types'
 
 /** 发送 JSON HTTP 请求，并将非成功响应转换成可读的 Error。 */
@@ -15,6 +16,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     cache: 'no-store',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (!response.ok) {
@@ -28,12 +30,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   /** 检查本地后端服务是否可以访问。 */
   health: () => request<{ status: string }>('/api/health'),
+  session: () => request<EmployeeSession>('/api/session'),
+  login: (employeeId: string) => request<EmployeeSession>('/api/session', {
+    method: 'POST', body: JSON.stringify({ employee_id: employeeId }),
+  }),
+  logout: () => request<void>('/api/session', { method: 'DELETE' }),
   /** 提交一个新的普通项目分析任务。 */
-  analyze: (projectPath: string) =>
+  analyze: (projectId: string) =>
     request<JobStatus>('/api/jobs/analyze', {
       method: 'POST',
-      body: JSON.stringify({ project_path: projectPath }),
+      body: JSON.stringify({ project_id: projectId }),
     }),
+  sourceProjects: () => request<SourceProject[]>('/api/source-projects'),
+  uploadProject: (file: File, onProgress?: (percent: number) => void) =>
+    new Promise<SourceProject>((resolve, reject) => {
+      const form = new FormData()
+      form.append('file', file)
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/source-projects/upload')
+      xhr.withCredentials = true
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress?.(Math.round(event.loaded / event.total * 100))
+      }
+      xhr.onload = () => {
+        let payload: any = null
+        try { payload = JSON.parse(xhr.responseText) } catch { /* handled below */ }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(payload as SourceProject)
+        else reject(new Error(payload?.detail || `上传失败 (${xhr.status})`))
+      }
+      xhr.onerror = () => reject(new Error('上传连接中断'))
+      xhr.send(form)
+    }),
+  deleteSourceProject: (projectId: string) =>
+    request<void>(`/api/source-projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' }),
+  exportJob: (jobId: string) => request<{ download_url: string }>(
+    `/api/jobs/${encodeURIComponent(jobId)}/export`, { method: 'POST' },
+  ),
   /** 在已有图任务上启动三级语义注释。 */
   annotate: (jobId: string) =>
     request<JobStatus>(`/api/jobs/${jobId}/annotate`, { method: 'POST' }),

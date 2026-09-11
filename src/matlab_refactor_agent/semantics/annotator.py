@@ -19,6 +19,7 @@ from matlab_refactor_agent.domain.semantics import (
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
 from matlab_refactor_agent.orchestration.call_lifecycle import CallObservationRecorder
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 from matlab_refactor_agent.workers.semantic_context import SemanticContextBuilder
 
 
@@ -81,7 +82,8 @@ class ClusterSemanticAnnotator:
                 ),
             }
         )
-        draft = self._client.complete(
+        draft = global_heavy_pool.run(
+            self._client.complete,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=json.dumps(payload, ensure_ascii=False, indent=2),
             response_model=ClusterAnnotationDraftResponse,

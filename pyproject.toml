@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=2.1,<3",
     "openai>=2.0,<3",
     "pydantic>=2.5,<3",
+    "python-multipart>=0.0.20,<1",
     "python-dotenv>=1.0,<2",
     "rich>=13.0,<15",
     "scipy>=1.14,<2",
@@ -34,6 +35,7 @@ matlab-refactor = "matlab_refactor_agent.interfaces.cli.main:main"
 matlab-refactor-web = "matlab_refactor_agent.interfaces.api.main:main"
 matlab-semantic-web = "matlab_refactor_agent.apps.semantic.backend.main:main"
 matlab-migration-web = "matlab_refactor_agent.apps.migration.backend.main:main"
+matlab-combined-web = "matlab_refactor_agent.apps.combined:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

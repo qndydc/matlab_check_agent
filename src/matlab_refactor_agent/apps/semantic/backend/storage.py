@@ -31,6 +31,8 @@ class StoredWebProject:
     semantics: SemanticIndex | None
     created_at: datetime
     updated_at: datetime
+    employee_id: str = "local"
+    project_id: str | None = None
     scan_reference: str | None = None
     analysis_reference: str | None = None
     source_fingerprint: str | None = None
@@ -59,8 +61,8 @@ class SQLiteWebProjectStore:
                 INSERT INTO web_projects(
                     job_id, project_path, state, stage, message, error,
                     graph_json, semantics_json, scan_reference, analysis_reference,
-                    source_fingerprint, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_fingerprint, created_at, updated_at, employee_id, project_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id) DO UPDATE SET
                     project_path=excluded.project_path,
                     state=excluded.state,
@@ -72,6 +74,8 @@ class SQLiteWebProjectStore:
                     scan_reference=excluded.scan_reference,
                     analysis_reference=excluded.analysis_reference,
                     source_fingerprint=excluded.source_fingerprint,
+                    employee_id=excluded.employee_id,
+                    project_id=excluded.project_id,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -88,54 +92,79 @@ class SQLiteWebProjectStore:
                     project.source_fingerprint,
                     project.created_at.isoformat(),
                     project.updated_at.isoformat(),
+                    project.employee_id,
+                    project.project_id,
                 ),
             )
 
-    def get(self, job_id: str) -> StoredWebProject | None:
+    def get(self, job_id: str, employee_id: str | None = None) -> StoredWebProject | None:
         """作用：按 Job ID 恢复一个 Web 项目快照。"""
 
         with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM web_projects WHERE job_id = ?", (job_id,)
-            ).fetchone()
+            if employee_id is None:
+                row = connection.execute(
+                    "SELECT * FROM web_projects WHERE job_id = ?", (job_id,)
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM web_projects WHERE job_id = ? AND employee_id = ?",
+                    (job_id, employee_id),
+                ).fetchone()
         return self._from_row(row) if row is not None else None
 
-    def list(self) -> list[StoredWebProject]:
+    def list(self, employee_id: str | None = None) -> list[StoredWebProject]:
         """作用：按最近更新时间倒序返回全部本地 Web 项目。"""
 
         with self._transaction() as connection:
-            rows = connection.execute(
-                "SELECT * FROM web_projects ORDER BY updated_at DESC, job_id DESC"
-            ).fetchall()
+            if employee_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM web_projects ORDER BY updated_at DESC, job_id DESC"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """SELECT * FROM web_projects WHERE employee_id = ?
+                       ORDER BY updated_at DESC, job_id DESC""",
+                    (employee_id,),
+                ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def analysis_snapshots(self) -> list[StoredWebProject]:
+    def analysis_snapshots(self, employee_id: str | None = None) -> list[StoredWebProject]:
         """返回可被迁移复用的静态分析，不把运行中的普通分析暴露为输入。"""
 
         with self._transaction() as connection:
-            rows = connection.execute(
-                """
+            query = """
                 SELECT * FROM web_projects
                 WHERE graph_json IS NOT NULL
                   AND scan_reference IS NOT NULL
                   AND analysis_reference IS NOT NULL
                   AND source_fingerprint IS NOT NULL
                   AND NOT (stage = 'analyze' AND state IN ('queued', 'running'))
-                ORDER BY updated_at DESC, job_id DESC
-                """
-            ).fetchall()
+            """
+            parameters: tuple[str, ...] = ()
+            if employee_id is not None:
+                query += " AND employee_id = ?"
+                parameters = (employee_id,)
+            query += " ORDER BY updated_at DESC, job_id DESC"
+            rows = connection.execute(query, parameters).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def delete(self, job_id: str) -> bool:
+    def delete(self, job_id: str, employee_id: str | None = None) -> bool:
         """作用：删除指定 Web 项目的持久化图和三级语义副本。"""
 
         with self._transaction() as connection:
-            connection.execute(
-                "DELETE FROM semantic_progress_events WHERE job_id = ?", (job_id,)
-            )
-            cursor = connection.execute(
-                "DELETE FROM web_projects WHERE job_id = ?", (job_id,)
-            )
+            if employee_id is None:
+                cursor = connection.execute(
+                    "DELETE FROM web_projects WHERE job_id = ?", (job_id,)
+                )
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM web_projects WHERE job_id = ? AND employee_id = ?",
+                    (job_id, employee_id),
+                )
+            if cursor.rowcount > 0:
+                connection.execute(
+                    "DELETE FROM semantic_progress_events WHERE job_id = ?", (job_id,)
+                )
         return cursor.rowcount > 0
 
     def append_progress_event(
@@ -233,6 +262,16 @@ class SQLiteWebProjectStore:
             for name in ("scan_reference", "analysis_reference", "source_fingerprint"):
                 if name not in existing:
                     connection.execute(f"ALTER TABLE web_projects ADD COLUMN {name} TEXT")
+            if "employee_id" not in existing:
+                connection.execute(
+                    "ALTER TABLE web_projects ADD COLUMN employee_id TEXT NOT NULL DEFAULT 'local'"
+                )
+            if "project_id" not in existing:
+                connection.execute("ALTER TABLE web_projects ADD COLUMN project_id TEXT")
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS idx_web_projects_employee_updated
+                   ON web_projects(employee_id, updated_at DESC)"""
+            )
             if recover_interrupted:
                 connection.execute(
                     """
@@ -267,6 +306,8 @@ class SQLiteWebProjectStore:
             ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            employee_id=row["employee_id"] if "employee_id" in row.keys() else "local",
+            project_id=row["project_id"] if "project_id" in row.keys() else None,
             scan_reference=row["scan_reference"],
             analysis_reference=row["analysis_reference"],
             source_fingerprint=row["source_fingerprint"],

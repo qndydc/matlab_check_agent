@@ -1,94 +1,77 @@
 services:
   data-init:
+    image: matlab-atlas:0.1.0
     build:
       context: .
       dockerfile: Dockerfile
-    image: matlab-atlas:0.1.0
     user: "0:0"
     restart: "no"
     command:
       - sh
       - -c
-      - "mkdir -p /data/config /data/graphs /data/jobs && chown -R 10001:10001 /data"
+      - "mkdir -p /data/config /data/jobs /data/graphs /data/users && chown -R 10001:10001 /data"
     volumes:
       - type: bind
         source: ${MATLAB_DATA_PATH:-./var/docker-data}
         target: /data
 
-  semantic-app:
+  matlab-app:
     platform: linux/amd64
+    image: matlab-atlas:0.1.0
     build:
       context: .
       dockerfile: Dockerfile
-    image: matlab-atlas:0.1.0
-    container_name: matlab-semantic-app
+    container_name: matlab-atlas-app
     restart: unless-stopped
     depends_on:
       data-init:
         condition: service_completed_successfully
-    ports:
-      - "${MATLAB_BIND_ADDRESS:-0.0.0.0}:${MATLAB_WEB_PORT:-8000}:8000"
     environment:
       MATLAB_REFACTOR_ENV_FILE: /data/config/.env
-      MATLAB_PROJECTS_HOST_PATH: ${MATLAB_PROJECTS_PATH:-./projects}
-      MATLAB_REFACTOR_INPUT_PATH: /projects
+      MATLAB_DATA_ROOT: /data
       MATLAB_REFACTOR_GRAPH_OUTPUT_DIR: /data/graphs
       MATLAB_REFACTOR_ARTIFACT_DIR: /data/jobs
       MATLAB_REFACTOR_STATE_DB: /data/refactor-agent.db
-      MATLAB_REFACTOR_WEB_DB: /data/web-projects.db
+      MATLAB_REFACTOR_WEB_DB: /data/control.db
+      MATLAB_REQUIRE_EMPLOYEE_ID: ${MATLAB_REQUIRE_EMPLOYEE_ID:-1}
+      MATLAB_ADMIN_EMPLOYEE_IDS: ${MATLAB_ADMIN_EMPLOYEE_IDS:-admin}
+      MATLAB_ACTIVE_JOBS: ${MATLAB_ACTIVE_JOBS:-16}
+      MATLAB_GLOBAL_WORKERS: ${MATLAB_GLOBAL_WORKERS:-8}
+      MATLAB_GLOBAL_PENDING: ${MATLAB_GLOBAL_PENDING:-16}
+      MATLAB_MAX_UPLOAD_BYTES: ${MATLAB_MAX_UPLOAD_BYTES:-2147483648}
+      MATLAB_MAX_UNPACKED_BYTES: ${MATLAB_MAX_UNPACKED_BYTES:-5368709120}
+      MATLAB_MAX_PROJECT_FILES: ${MATLAB_MAX_PROJECT_FILES:-100000}
+      MATLAB_USER_QUOTA_BYTES: ${MATLAB_USER_QUOTA_BYTES:-10737418240}
     volumes:
-      - type: bind
-        source: ${MATLAB_PROJECTS_PATH:-./projects}
-        target: /projects
-        read_only: true
       - type: bind
         source: ${MATLAB_DATA_PATH:-./var/docker-data}
         target: /data
+    expose:
+      - "8000"
+      - "8001"
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3); urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=3)"
       interval: 30s
       timeout: 5s
-      start_period: 20s
+      start_period: 30s
       retries: 3
 
-  migration-app:
-    platform: linux/amd64
-    build:
-      context: .
-      dockerfile: Dockerfile.migration
-    image: matlab-migration:0.1.0
-    container_name: matlab-migration-app
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: matlab-atlas-nginx
     restart: unless-stopped
     depends_on:
-      data-init:
-        condition: service_completed_successfully
-    environment:
-      MATLAB_REFACTOR_ENV_FILE: /data/config/.env
-      MATLAB_PROJECTS_HOST_PATH: ${MATLAB_PROJECTS_PATH:-./projects}
-      MATLAB_REFACTOR_ARTIFACT_DIR: /data/jobs
-      MATLAB_REFACTOR_STATE_DB: /data/refactor-agent.db
-      MATLAB_REFACTOR_WEB_DB: /data/web-projects.db
+      matlab-app:
+        condition: service_healthy
+    ports:
+      - "${MATLAB_BIND_ADDRESS:-0.0.0.0}:${MATLAB_WEB_PORT:-8000}:8000"
+      - "${MATLAB_BIND_ADDRESS:-0.0.0.0}:${MATLAB_MIGRATION_WEB_PORT:-8001}:8001"
     volumes:
       - type: bind
-        source: ${MATLAB_PROJECTS_PATH:-./projects}
-        target: /projects
+        source: ./packaging/nginx.conf
+        target: /etc/nginx/nginx.conf
         read_only: true
-      - type: bind
-        source: ${MATLAB_DATA_PATH:-./var/docker-data}
-        target: /data
-    ports:
-      - "${MATLAB_MIGRATION_BIND_ADDRESS:-0.0.0.0}:${MATLAB_MIGRATION_WEB_PORT:-8001}:8001"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=3)"
-      interval: 30s
-      timeout: 5s
-      start_period: 20s
-      retries: 3

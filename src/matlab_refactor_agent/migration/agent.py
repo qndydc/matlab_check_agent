@@ -6,7 +6,6 @@ Referenced By: MainWorkflow 和 MigrationService。
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
@@ -152,12 +151,10 @@ class MatlabToPythonMigrationAgent:
         artifacts: dict[str, str] = {}
         while ready := MigrationScheduler.ready(state_store.load()):
             wave = ready[:self._max_concurrency]
-            with ThreadPoolExecutor(
-                max_workers=len(wave), thread_name_prefix="migration-wcc"
-            ) as executor:
-                results = list(executor.map(
-                    lambda unit: self._run_assigned(session, unit.unit_id), wave
-                ))
+            # WCC is orchestration. Its heavy Act chunks enter the shared pool.
+            results = [
+                self._run_assigned(session, unit.unit_id) for unit in wave
+            ]
             for state, produced in results:
                 last_state = state
                 artifacts.update(produced)

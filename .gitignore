@@ -18,6 +18,14 @@ var/
 .idea/
 .vscode/
 tests/unit/
+!tests/unit/
+tests/unit/*
+!tests/unit/interfaces/
+tests/unit/interfaces/*
+!tests/unit/interfaces/test_multiuser.py
+!tests/unit/orchestration/
+tests/unit/orchestration/*
+!tests/unit/orchestration/test_execution_pool.py
 projects/
 tests/fixtures/
 
@@ -26,3 +34,6 @@ tests/fixtures/
 .sha256
 .test-tmp
 packaging/
+!packaging/
+packaging/*
+!packaging/nginx.conf

@@ -161,6 +161,10 @@ function MigrationView({ detail }: { detail: ChainDetail | null }) {
 }
 
 export default function App() {
+  const [employeeId, setEmployeeId] = useState<string | null>(null)
+  const [administrator, setAdministrator] = useState(false)
+  const [loginInput, setLoginInput] = useState('')
+  const [sessionChecked, setSessionChecked] = useState(false)
   const [tab, setTab] = useState<WorkspaceTab>('migration')
   const [analyses, setAnalyses] = useState<ProjectAnalysis[]>([])
   const [analysisJobId, setAnalysisJobId] = useState('')
@@ -188,6 +192,17 @@ export default function App() {
     : 0
 
   useEffect(() => {
+    api.session()
+      .then((session) => {
+        setEmployeeId(session.employee_id)
+        setAdministrator(session.administrator)
+      })
+      .catch(() => setEmployeeId(null))
+      .finally(() => setSessionChecked(true))
+  }, [])
+
+  useEffect(() => {
+    if (!employeeId) return
     let cancelled = false
     Promise.all([api.health(), api.capabilities(), api.projects(), api.projectAnalyses()])
       .then(([, value, projects, availableAnalyses]) => {
@@ -199,7 +214,7 @@ export default function App() {
       })
       .catch(() => { if (!cancelled) setOnline(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [employeeId])
 
   useEffect(() => {
     if (!busy) return
@@ -295,6 +310,30 @@ export default function App() {
     catch { setNotice('无法访问剪贴板，请参照使用教程复制命令') }
   }
 
+  async function login() {
+    try {
+      const session = await api.login(loginInput.trim())
+      setEmployeeId(session.employee_id); setAdministrator(session.administrator); setNotice(null)
+    } catch (error) { setNotice((error as Error).message) }
+  }
+
+  async function downloadResult() {
+    if (!job) return
+    try {
+      await api.exportJob(job.job_id)
+      window.location.assign(`/api/migrations/${encodeURIComponent(job.job_id)}/download`)
+    } catch (error) { setNotice((error as Error).message) }
+  }
+
+  if (!sessionChecked) return <main className="login-screen"><div className="login-card">正在连接服务器…</div></main>
+  if (!employeeId) return <main className="login-screen"><form className="login-card" onSubmit={(event) => { event.preventDefault(); void login() }}>
+    <div className="brand-mark">M<span>→</span>P</div><h1>Migration Workbench</h1>
+    <p>请输入工号。首次使用会自动创建个人数据空间。</p>
+    <input autoFocus aria-label="工号" value={loginInput} onChange={(event) => setLoginInput(event.target.value)} placeholder="例如：E001" />
+    <button className="run-button" disabled={!loginInput.trim()}>进入工作台</button>
+    {notice && <span className="login-error">{notice}</span>}
+  </form></main>
+
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand-mark">M<span>→</span>P</div>
@@ -303,9 +342,9 @@ export default function App() {
         <button className={tab === 'analysis' ? 'active' : ''} onClick={() => setTab('analysis')}>WCC 结构</button>
         <button className={tab === 'migration' ? 'active' : ''} onClick={() => setTab('migration')}>迁移</button>
       </nav>
-      <div className="migration-top-controls"><button className="settings-toggle" onClick={() => setSettingsOpen(true)}>设置</button>
+      <div className="migration-top-controls"><button className="settings-toggle" disabled={!job} onClick={downloadResult}>下载结果</button>{administrator && <button className="settings-toggle" onClick={() => setSettingsOpen(true)}>设置</button>}
         <div className={`service ${online ? 'online' : online === false ? 'offline' : ''}`}><i />
-          {online === null ? '连接中' : online ? '后端已连接' : '后端离线'}</div></div>
+          {employeeId} · {online === null ? '连接中' : online ? '已连接' : '离线'}</div></div>
     </header>
 
     <section className="command-bar">

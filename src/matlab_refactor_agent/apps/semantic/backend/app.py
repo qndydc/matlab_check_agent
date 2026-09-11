@@ -17,10 +17,10 @@ from pathlib import Path, PureWindowsPath
 from threading import RLock
 from typing import Annotated, Callable, Literal, cast
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from matlab_refactor_agent.application import SemanticService
@@ -29,6 +29,15 @@ from matlab_refactor_agent.domain.semantics import SemanticIndex, SemanticProgre
 from matlab_refactor_agent.infrastructure.config import AppSettings, load_settings
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.interfaces.api.settings import env_file_path, install_model_settings_routes
+from matlab_refactor_agent.interfaces.api.multiuser import (
+    ControlStore,
+    EmployeeSession,
+    create_export,
+    install_admin_routes,
+    install_identity_routes,
+    install_project_routes,
+)
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool, global_job_coordinator
 from matlab_refactor_agent.migration.checkpoint import source_fingerprint
 from matlab_refactor_agent.domain.models import ScanResult
 from matlab_refactor_agent.domain.models import AnalysisResult
@@ -53,7 +62,8 @@ def _utc_now() -> datetime:
 
 
 class AnalyzeRequest(BaseModel):
-    project_path: str = Field(min_length=1)
+    project_path: str | None = None
+    project_id: str | None = None
 
 
 def resolve_project_path(
@@ -144,6 +154,7 @@ class JobResponse(BaseModel):
     can_resume: bool = False
     created_at: datetime
     updated_at: datetime
+    project_id: str | None = None
 
 
 @dataclass
@@ -161,6 +172,8 @@ class _Job:
     source_fingerprint: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
+    employee_id: str = "local"
+    project_id: str | None = None
 
     def response(self) -> JobResponse:
         """作用：将内部任务转换成可公开返回的 API 状态模型。"""
@@ -178,6 +191,7 @@ class _Job:
                                 and self.source_fingerprint),
             created_at=self.created_at,
             updated_at=self.updated_at,
+            project_id=self.project_id,
         )
 
     def stored(self) -> StoredWebProject:
@@ -194,6 +208,8 @@ class _Job:
             semantics=self.semantics,
             created_at=self.created_at,
             updated_at=self.updated_at,
+            employee_id=self.employee_id,
+            project_id=self.project_id,
             scan_reference=self.scan_reference,
             analysis_reference=self.analysis_reference,
             source_fingerprint=self.source_fingerprint,
@@ -217,6 +233,8 @@ class _Job:
             scan_reference=project.scan_reference,
             analysis_reference=project.analysis_reference,
             source_fingerprint=project.source_fingerprint,
+            employee_id=project.employee_id,
+            project_id=project.project_id,
         )
 
 
@@ -230,8 +248,10 @@ class MvpJobManager:
         store: SQLiteWebProjectStore | None = None,
         env_file: Path | None = None,
         settings: AppSettings | None = None,
+        control_store: ControlStore | None = None,
     ) -> None:
         settings = settings or load_settings(env_file)
+        self._settings = settings
         if service_factory is None:
             self._service_factory = lambda: SemanticService(load_settings(env_file))
         else:
@@ -241,23 +261,53 @@ class MvpJobManager:
         else:
             self._store = store
         self._artifacts = ArtifactStore(settings.orchestrator.artifact_dir)
-        self._executor = executor or ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="matlab-web"
+        self._executor = executor or global_job_coordinator
+        self._control = control_store or ControlStore(
+            self._store.database if store is not None else settings.orchestrator.web_db
         )
         self._jobs: dict[str, _Job] = {}
         self._lock = RLock()
 
-    def submit_analysis(self, project_path: str) -> JobResponse:
-        project = resolve_project_path(project_path)
-        job = _Job(job_id=new_job_id(), project_path=project)
+    def submit_analysis(
+        self, project_path: str | None = None, *, project_id: str | None = None,
+        employee_id: str = "local",
+    ) -> JobResponse:
+        if project_id:
+            uploaded = self._control.get_project(project_id, employee_id)
+            if uploaded.state != "ready":
+                raise HTTPException(409, "上传项目尚未处理完成")
+            project = Path(uploaded.storage_path).resolve()
+        elif project_path:
+            if self._control.runtime.require_employee:
+                raise HTTPException(422, "服务器模式只能选择已上传项目")
+            project = resolve_project_path(project_path)
+        else:
+            raise HTTPException(422, "请选择已上传项目")
+        job = _Job(
+            job_id=new_job_id(), project_path=project,
+            employee_id=employee_id, project_id=project_id,
+        )
+        self._control.register_job(
+            job.job_id, employee_id, "semantic", project_id=project_id,
+            state=job.state, stage=job.stage,
+        )
+        self._control.update_job(
+            job.job_id,
+            employee_id,
+            settings_snapshot=json.dumps({
+                "model": self._settings.llm.model,
+                "base_url": self._settings.llm.base_url,
+                "semantic_max_agents": self._settings.llm.semantic_max_agents,
+            }, ensure_ascii=False),
+        )
         with self._lock:
             self._jobs[job.job_id] = job
             self._persist(job)
         self._submit(job, self._run_analysis)
         return job.response()
 
-    def submit_annotation(self, job_id: str) -> JobResponse:
-        job = self._get(job_id)
+    def submit_annotation(self, job_id: str, employee_id: str = "local") -> JobResponse:
+        job = self._get(job_id, employee_id)
         with self._lock:
             if job.state in {"queued", "running"}:
                 raise HTTPException(status.HTTP_409_CONFLICT, "任务仍在运行")
@@ -279,9 +329,9 @@ class MvpJobManager:
         return self._artifacts.read_model(
             self._artifacts.reference(job.job_id, "semantic-run.json"), SemanticRunReference).job_id
 
-    def resume(self, job_id: str) -> JobResponse:
+    def resume(self, job_id: str, employee_id: str = "local") -> JobResponse:
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job.state in {"queued", "running"}:
                 raise HTTPException(409, "任务仍在运行")
             try:
@@ -299,14 +349,21 @@ class MvpJobManager:
             job.semantics = None
             self._persist(job)
             self._submit(job, lambda item: self._run_annotation(item, resume=True))
-            return self.status(job_id)
+            return self.status(job_id, employee_id)
 
-    def restart(self, job_id: str) -> JobResponse:
+    def restart(self, job_id: str, employee_id: str = "local") -> JobResponse:
         with self._lock:
-            previous = self._get(job_id)
+            previous = self._get(job_id, employee_id)
             if previous.state in {"queued", "running"}:
                 raise HTTPException(409, "任务仍在运行")
-            job = _Job(job_id=new_job_id(), project_path=previous.project_path)
+            job = _Job(
+                job_id=new_job_id(), project_path=previous.project_path,
+                employee_id=employee_id, project_id=previous.project_id,
+            )
+            self._control.register_job(
+                job.job_id, employee_id, "semantic", project_id=job.project_id,
+                state=job.state, stage=job.stage,
+            )
             self._jobs[job.job_id] = job
             self._persist(job)
             self._submit(job, self._run_full_annotation)
@@ -319,9 +376,9 @@ class MvpJobManager:
             self._persist(job)
         self._run_annotation(job)
 
-    def status(self, job_id: str) -> JobResponse:
+    def status(self, job_id: str, employee_id: str = "local") -> JobResponse:
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             response = job.response()
             if job.stage == "annotate" and job.state not in {"queued", "running"}:
                 try:
@@ -331,9 +388,9 @@ class MvpJobManager:
                     pass
             return response
 
-    def graph(self, job_id: str) -> GraphDocument:
+    def graph(self, job_id: str, employee_id: str = "local") -> GraphDocument:
         with self._lock:
-            graph = self._get(job_id).graph
+            graph = self._get(job_id, employee_id).graph
             if graph is None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "图数据尚未生成")
             return graph
@@ -348,11 +405,12 @@ class MvpJobManager:
         limit: int,
         direction: GraphDirection,
         query: str | None,
+        employee_id: str = "local",
     ) -> GraphViewDocument:
         """作用：从持久化完整图即时生成受节点上限约束的渐进浏览视图。"""
 
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job.graph is None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "图数据尚未生成")
             summaries = {
@@ -373,29 +431,31 @@ class MvpJobManager:
             except ValueError as error:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
 
-    def semantics(self, job_id: str) -> SemanticIndex:
+    def semantics(self, job_id: str, employee_id: str = "local") -> SemanticIndex:
         with self._lock:
-            semantics = self._get(job_id).semantics
+            semantics = self._get(job_id, employee_id).semantics
             if semantics is None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "三级注释尚未生成")
             return semantics
 
     def semantic_events(
-        self, job_id: str, *, after_sequence: int = 0
+        self, job_id: str, *, after_sequence: int = 0, employee_id: str = "local"
     ) -> list[SemanticProgressEvent]:
         """增量返回语义 LangGraph 事件，任务运行中也可读取。"""
 
         with self._lock:
-            self._get(job_id)
+            self._get(job_id, employee_id)
         return self._store.progress_events(
             job_id, after_sequence=after_sequence
         )
 
-    def function_source(self, job_id: str, symbol_id: str) -> FunctionSourceResponse:
+    def function_source(
+        self, job_id: str, symbol_id: str, employee_id: str = "local"
+    ) -> FunctionSourceResponse:
         """作用：依据已分析图节点安全读取函数源码；输入：Job 和 symbol；输出：限定行范围源码。"""
 
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job.graph is None:
                 raise HTTPException(status.HTTP_409_CONFLICT, "图数据尚未生成")
             node = next((item for item in job.graph.nodes if item.id == symbol_id), None)
@@ -424,21 +484,31 @@ class MvpJobManager:
                 source=source,
             )
 
-    def projects(self) -> list[JobResponse]:
+    def projects(self, employee_id: str = "local") -> list[JobResponse]:
         """作用：列出所有持久化项目，供前端历史记录面板展示。"""
 
-        return [self.status(item.job_id) for item in self._store.list()]
+        return [self.status(item.job_id, employee_id) for item in self._store.list(employee_id)]
 
-    def delete_project(self, job_id: str) -> None:
+    def delete_project(self, job_id: str, employee_id: str = "local") -> None:
         """作用：删除非运行中项目的本地图和三级语义快照。"""
 
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job.state in {"queued", "running"}:
                 raise HTTPException(status.HTTP_409_CONFLICT, "运行中的项目不能删除")
-            if not self._store.delete(job_id):
+            if not self._store.delete(job_id, employee_id):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "项目不存在")
             self._jobs.pop(job_id, None)
+
+    def export_job(self, job_id: str, employee_id: str = "local") -> Path:
+        """打包当前用户拥有的任务产物，并返回可下载 ZIP。"""
+
+        self._get(job_id, employee_id)
+        return global_heavy_pool.run(
+            create_export,
+            self._artifacts.root / job_id,
+            self._control.export_path(employee_id, job_id),
+        )
 
     def _submit(self, job: _Job, operation: Callable[[_Job], None]) -> None:
         future = self._executor.submit(operation, job)
@@ -523,10 +593,12 @@ class MvpJobManager:
             job.error = str(error)
             self._persist(job)
 
-    def _get(self, job_id: str) -> _Job:
+    def _get(self, job_id: str, employee_id: str | None = None) -> _Job:
         job = self._jobs.get(job_id)
+        if job is not None and employee_id is not None and job.employee_id != employee_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
         if job is None:
-            stored = self._store.get(job_id)
+            stored = self._store.get(job_id, employee_id)
             if stored is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
             job = _Job.from_stored(stored)
@@ -537,6 +609,10 @@ class MvpJobManager:
         """作用：把当前内存任务的最新状态和结果同步到 SQLite。"""
 
         self._store.save(job.stored())
+        self._control.update_job(
+            job.job_id, job.employee_id, state=job.state, stage=job.stage,
+            error=job.error, project_id=job.project_id,
+        )
 
 
 def _frontend_directory(configured: Path | None = None) -> Path | None:
@@ -570,40 +646,62 @@ def create_app(
     api.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     settings_file = env_file_path(env_file)
     jobs = manager or MvpJobManager(env_file=settings_file)
-    install_model_settings_routes(api, settings_file)
+    session = EmployeeSession(jobs._control)
+    install_identity_routes(api, session)
+    install_project_routes(api, session)
+    install_admin_routes(api, session)
+    install_model_settings_routes(api, settings_file, session.administrator)
 
     @api.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @api.post("/api/jobs/analyze", response_model=JobResponse, status_code=202)
-    def analyze(request: AnalyzeRequest) -> JobResponse:
-        return jobs.submit_analysis(request.project_path)
+    def analyze(
+        request: AnalyzeRequest,
+        employee_id: str = Depends(session.current),
+    ) -> JobResponse:
+        return jobs.submit_analysis(
+            request.project_path,
+            project_id=request.project_id,
+            employee_id=employee_id,
+        )
 
     @api.post("/api/jobs/{job_id}/annotate", response_model=JobResponse, status_code=202)
-    def annotate(job_id: str) -> JobResponse:
-        return jobs.submit_annotation(job_id)
+    def annotate(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> JobResponse:
+        return jobs.submit_annotation(job_id, employee_id)
 
     @api.post("/api/jobs/{job_id}/resume", response_model=JobResponse, status_code=202)
-    def resume_annotation(job_id: str) -> JobResponse:
-        return jobs.resume(job_id)
+    def resume_annotation(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> JobResponse:
+        return jobs.resume(job_id, employee_id)
 
     @api.post("/api/jobs/{job_id}/restart", response_model=JobResponse, status_code=202)
-    def restart_annotation(job_id: str) -> JobResponse:
-        return jobs.restart(job_id)
+    def restart_annotation(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> JobResponse:
+        return jobs.restart(job_id, employee_id)
 
     @api.get("/api/jobs/{job_id}", response_model=JobResponse)
-    def job_status(job_id: str) -> JobResponse:
-        return jobs.status(job_id)
+    def job_status(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> JobResponse:
+        return jobs.status(job_id, employee_id)
 
     @api.get("/api/jobs/{job_id}/graph", response_model=GraphDocument)
-    def graph(job_id: str) -> GraphDocument:
-        return jobs.graph(job_id)
+    def graph(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> GraphDocument:
+        return jobs.graph(job_id, employee_id)
 
     @api.get("/api/jobs/{job_id}/graph/view", response_model=GraphViewDocument)
     def graph_view(
@@ -614,6 +712,7 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=150)] = 80,
         direction: GraphDirection = "both",
         query: str | None = None,
+        employee_id: str = Depends(session.current),
     ) -> GraphViewDocument:
         """作用：返回目录、文件或函数层级的有限可见调用图。"""
 
@@ -625,11 +724,14 @@ def create_app(
             limit=limit,
             direction=direction,
             query=query,
+            employee_id=employee_id,
         )
 
     @api.get("/api/jobs/{job_id}/semantics", response_model=SemanticIndex)
-    def semantics(job_id: str) -> SemanticIndex:
-        return jobs.semantics(job_id)
+    def semantics(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> SemanticIndex:
+        return jobs.semantics(job_id, employee_id)
 
     @api.get(
         "/api/jobs/{job_id}/semantic-events",
@@ -638,25 +740,31 @@ def create_app(
     def semantic_events(
         job_id: str,
         after_sequence: Annotated[int, Query(ge=0)] = 0,
+        employee_id: str = Depends(session.current),
     ) -> list[SemanticProgressEvent]:
         """按 sequence 增量读取 LangGraph 节点事件。"""
 
-        return jobs.semantic_events(job_id, after_sequence=after_sequence)
+        return jobs.semantic_events(
+            job_id, after_sequence=after_sequence, employee_id=employee_id
+        )
 
     @api.get("/api/jobs/{job_id}/semantic-events/stream")
     async def semantic_event_stream(
         job_id: str,
         after_sequence: Annotated[int, Query(ge=0)] = 0,
+        employee_id: str = Depends(session.current),
     ) -> StreamingResponse:
         """通过 Server-Sent Events 实时推送 LangGraph 节点进度。"""
 
-        jobs.status(job_id)
+        jobs.status(job_id, employee_id)
 
         async def generate():
             cursor = after_sequence
             idle_cycles = 0
             while True:
-                events = jobs.semantic_events(job_id, after_sequence=cursor)
+                events = jobs.semantic_events(
+                    job_id, after_sequence=cursor, employee_id=employee_id
+                )
                 for event in events:
                     cursor = event.sequence
                     idle_cycles = 0
@@ -665,7 +773,7 @@ def create_app(
                         "event: semantic_progress\n"
                         f"data: {event.model_dump_json()}\n\n"
                     )
-                current = jobs.status(job_id)
+                current = jobs.status(job_id, employee_id)
                 if current.state in {"completed", "failed"}:
                     terminal = json.dumps(
                         {
@@ -698,22 +806,47 @@ def create_app(
         "/api/jobs/{job_id}/functions/{symbol_id:path}/source",
         response_model=FunctionSourceResponse,
     )
-    def function_source(job_id: str, symbol_id: str) -> FunctionSourceResponse:
+    def function_source(
+        job_id: str,
+        symbol_id: str,
+        employee_id: str = Depends(session.current),
+    ) -> FunctionSourceResponse:
         """作用：返回选中函数的只读源码切片。"""
 
-        return jobs.function_source(job_id, symbol_id)
+        return jobs.function_source(job_id, symbol_id, employee_id)
 
     @api.get("/api/projects", response_model=list[JobResponse])
-    def projects() -> list[JobResponse]:
+    def projects(
+        employee_id: str = Depends(session.current),
+    ) -> list[JobResponse]:
         """作用：返回本机长期保存的全部 Web 项目。"""
 
-        return jobs.projects()
+        return jobs.projects(employee_id)
 
     @api.delete("/api/projects/{job_id}", status_code=204)
-    def delete_project(job_id: str) -> None:
+    def delete_project(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> None:
         """作用：删除指定项目的本地图和三级语义快照。"""
 
-        jobs.delete_project(job_id)
+        jobs.delete_project(job_id, employee_id)
+
+    @api.post("/api/jobs/{job_id}/export", status_code=202)
+    def export_job(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> dict[str, str]:
+        path = jobs.export_job(job_id, employee_id)
+        return {"job_id": job_id, "download_url": f"/api/jobs/{job_id}/download", "filename": path.name}
+
+    @api.get("/api/jobs/{job_id}/download")
+    def download_job(
+        job_id: str, employee_id: str = Depends(session.current)
+    ) -> FileResponse:
+        jobs.status(job_id, employee_id)
+        path = jobs._control.export_path(employee_id, job_id)
+        if not path.is_file():
+            raise HTTPException(409, "请先生成下载包")
+        return FileResponse(path, media_type="application/zip", filename=path.name)
 
     static_directory = _frontend_directory(frontend_dir)
     if static_directory is not None:

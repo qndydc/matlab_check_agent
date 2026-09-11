@@ -51,9 +51,10 @@ matlab_check_agent/
 │   ├── start_mvp.py                       # 一键启动 Semantic 前后端
 │   └── start_migration.py                 # 一键启动 Migration 前后端
 ├── docs/                                  # 使用、部署、结构和算法文档
-├── Dockerfile                             # Semantic 前后端生产镜像
-├── Dockerfile.migration                   # Migration 前后端生产镜像
-├── compose.yaml                           # 同时运行两个应用
+├── Dockerfile                             # 两个前端与两个 API 的统一生产镜像
+├── Dockerfile.migration                   # 旧版 Migration 独立镜像（兼容保留）
+├── compose.yaml                           # Nginx + 单应用进程 + 数据初始化
+├── packaging/nginx.conf                   # 双端口反向代理、上传与 SSE 配置
 └── pyproject.toml                         # Python 包、CLI 和测试配置
 ```
 
@@ -164,7 +165,7 @@ apps/semantic/backend/app.py
 SemanticService
 ```
 
-后端负责异步 Job、项目历史、渐进调用图、函数源码切片和语义事件。`storage.py` 使用 SQLite 保存可恢复的 Web 项目快照。
+后端负责异步 Job、用户 ZIP 项目、项目历史、渐进调用图、函数源码切片和语义事件。`storage.py` 使用 SQLite 保存可恢复的 Web 项目快照。
 
 ### Migration App
 
@@ -176,7 +177,7 @@ apps/migration/backend/app.py
 MigrationJobManager → MigrationService
 ```
 
-迁移页面复用 Semantic App 保存的静态分析引用，但不重复运行 Scanner/Parser/Analyzer。两个应用通过显式 Artifact 和共享 SQLite 路径协作，不通过前端传输大块源码。
+迁移页面复用 Semantic App 保存的静态分析引用，但不重复运行 Scanner/Parser/Analyzer。Docker 部署时，`apps/combined.py` 在同一 Python 进程内托管两个 API，使二者共享 `JobCoordinator` 和 `GlobalHeavyWorkPool`；两个应用通过显式 Artifact 和共享 SQLite 路径协作。
 
 ## 测试对应关系
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from matlab_refactor_agent.domain.diagnostics import FailureDiagnostic
 from matlab_refactor_agent.domain.migration import TranslationResponse
 from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 from matlab_refactor_agent.orchestration.call_lifecycle import ObservationSink
 
 SYSTEM_PROMPT = (
@@ -25,7 +26,8 @@ class MatlabToPythonRepairAgent:
 
     def repair(self, translation: TranslationResponse,
                diagnostic: FailureDiagnostic) -> TranslationResponse:
-        response = self._client.complete(
+        response = global_heavy_pool.run(
+            self._client.complete,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=(translation.model_dump_json(indent=2) + "\n失败事实:\n" +
                          diagnostic.model_dump_json(indent=2)),

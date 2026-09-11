@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -41,6 +40,7 @@ from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
 from matlab_refactor_agent.infrastructure.llm.token_budget import estimate_tokens
 from matlab_refactor_agent.orchestration.call_lifecycle import CallObservationRecorder
 from matlab_refactor_agent.orchestration.migration_state import MigrationStateStore
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 from matlab_refactor_agent.workers.call_chain_observer import CallChainObserver
 from matlab_refactor_agent.workers.python_project_assembler import (
     PythonProjectAssembler,
@@ -405,26 +405,23 @@ class MigrationRuntime:
                 f"执行 chunk wave：{', '.join(item.chunk_id for item in wave)}",
                 context.unit.unit_id,
             )
-            with ThreadPoolExecutor(
-                max_workers=len(wave), thread_name_prefix="migration-act-chunk"
-            ) as executor:
-                futures = [
-                    executor.submit(
-                        self._run_chunk,
-                        chunk_store,
-                        planner,
-                        chunk,
-                        context,
-                        stratagem,
-                    )
-                    for chunk in wave
-                ]
-                errors: list[BaseException] = []
-                for future in futures:
-                    try:
-                        future.result()
-                    except BaseException as exc:
-                        errors.append(exc)
+            futures = [
+                global_heavy_pool.submit(
+                    self._run_chunk,
+                    chunk_store,
+                    planner,
+                    chunk,
+                    context,
+                    stratagem,
+                )
+                for chunk in wave
+            ]
+            errors: list[BaseException] = []
+            for future in futures:
+                try:
+                    future.result()
+                except BaseException as exc:
+                    errors.append(exc)
             if errors:
                 failed = [
                     item for item in ActChunkStore.leaves(chunk_store.load())

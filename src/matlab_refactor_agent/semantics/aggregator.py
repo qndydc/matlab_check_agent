@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from typing import TypeVar
 
@@ -27,6 +26,7 @@ from matlab_refactor_agent.domain.semantics import (
     SemanticIndex,
 )
 from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.orchestration.call_lifecycle import CallObservationRecorder
 
@@ -91,7 +91,8 @@ class SemanticAggregator:
                 f"response_model={response_model.__name__} prompt_chars={len(user_prompt)}",
                 flush=True,
             )
-        draft = self._client.complete(
+        draft = global_heavy_pool.run(
+            self._client.complete,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=response_model,
@@ -183,12 +184,11 @@ class SemanticAggregator:
                   for path in sorted(by_file)]
         if self._max_concurrency == 1 or len(inputs) < 2:
             return [self._file_annotation(path, items) for path, items in inputs]
-        with ThreadPoolExecutor(
-            max_workers=min(self._max_concurrency, len(inputs)),
-            thread_name_prefix="semantic-file",
-        ) as executor:
-            # executor.map 保留稳定的文件顺序，但模型请求会同时进行。
-            return list(executor.map(lambda pair: self._file_annotation(*pair), inputs))
+        futures = [
+            global_heavy_pool.submit(self._file_annotation, path, items)
+            for path, items in inputs
+        ]
+        return [future.result() for future in futures]
 
     def _file_annotation(
         self, file_path: str, items: list[FunctionAnnotation]

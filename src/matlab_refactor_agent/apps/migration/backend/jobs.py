@@ -7,7 +7,6 @@ Referenced By: migration.backend.app 和迁移 Web 集成测试。
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -33,6 +32,11 @@ from matlab_refactor_agent.domain.orchestration import new_job_id
 from matlab_refactor_agent.domain.semantics import SemanticIndex
 from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.infrastructure.config import AppSettings, load_settings
+from matlab_refactor_agent.interfaces.api.multiuser import ControlStore, create_export
+from matlab_refactor_agent.orchestration.execution_pool import (
+    global_heavy_pool,
+    global_job_coordinator,
+)
 from matlab_refactor_agent.migration.checkpoint import (
     CHECKPOINT_NAME, MigrationCheckpointStore, source_fingerprint,
     validate_resume_source,
@@ -48,6 +52,8 @@ class MigrationJob(BaseModel):
 
     job_id: str
     project_path: str
+    employee_id: str = "local"
+    project_id: str | None = None
     semantic_index_reference: str | None = None
     analysis_job_id: str | None = None
     scan_reference: str | None = None
@@ -69,7 +75,8 @@ class MigrationJobManager:
 
     def __init__(self, settings: AppSettings | None = None,
                  service_factory: Callable[[], MigrationService] | None = None,
-                 env_file: Path | None = None) -> None:
+                 env_file: Path | None = None,
+                 control_store: ControlStore | None = None) -> None:
         self.settings = settings or load_settings(env_file)
         self.artifacts = ArtifactStore(self.settings.orchestrator.artifact_dir)
         # 读取 5173 的项目静态分析快照；不能恢复/修改语义 Web Job 的运行状态。
@@ -89,13 +96,15 @@ class MigrationJobManager:
         self._service_factory = service_factory or (
             lambda: MigrationService(runtime_settings())
         )
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="migration-web")
+        self._executor = global_job_coordinator
+        self._control = control_store or ControlStore(self.settings.orchestrator.web_db)
         self._lock = RLock()
         self._active: set[str] = set()
         self._owner = uuid4().hex
 
     def close(self) -> None:
-        self._executor.shutdown(wait=True)
+        # The process-wide coordinator is shared with the Semantic application.
+        return None
 
     def submit(
         self,
@@ -103,17 +112,26 @@ class MigrationJobManager:
         semantic_reference: str | None = None,
         *,
         analysis_job_id: str | None = None,
+        project_id: str | None = None,
+        employee_id: str = "local",
     ) -> dict:
         """创建迁移 Job；Web 优先引用 5173 的项目静态分析快照。"""
 
-        snapshot = self._analysis_snapshot(analysis_job_id) if analysis_job_id else None
+        snapshot = self._analysis_snapshot(analysis_job_id, employee_id) if analysis_job_id else None
         if snapshot is not None:
             root, _, _ = self._validate_analysis_snapshot(snapshot)
             if project_path and Path(project_path.strip()).expanduser().resolve() != root:
                 raise HTTPException(422, "填写的项目目录与所选项目静态分析不一致")
+        elif project_id:
+            uploaded = self._control.get_project(project_id, employee_id)
+            if uploaded.state != "ready":
+                raise HTTPException(409, "上传项目尚未处理完成")
+            root = Path(uploaded.storage_path).resolve()
         else:
             if not project_path or not project_path.strip():
                 raise HTTPException(422, "请选择项目静态分析，或填写 MATLAB 项目目录")
+            if self._control.runtime.require_employee:
+                raise HTTPException(422, "服务器模式只能选择已上传项目或已有分析")
             root = Path(project_path.strip()).expanduser().resolve()
             if not root.is_dir():
                 raise HTTPException(422, "MATLAB 项目目录不存在（请填写后端所在机器的路径）")
@@ -137,6 +155,8 @@ class MigrationJobManager:
         job = MigrationJob(
             job_id=new_job_id(),
             project_path=str(root),
+            employee_id=employee_id,
+            project_id=project_id or (snapshot.project_id if snapshot else None),
             analysis_job_id=snapshot.job_id if snapshot else None,
             scan_reference=snapshot.scan_reference if snapshot else None,
             analysis_reference=snapshot.analysis_reference if snapshot else None,
@@ -145,13 +165,27 @@ class MigrationJobManager:
             job.semantic_index_reference = self.artifacts.write_model(
                 job.job_id, "input-semantic-index.json", semantic
             )
+        self._control.register_job(
+            job.job_id, employee_id, "migration", project_id=job.project_id,
+            state=job.state, stage="migration",
+        )
+        self._control.update_job(
+            job.job_id,
+            employee_id,
+            settings_snapshot=json.dumps({
+                "model": self.settings.llm.model,
+                "base_url": self.settings.llm.base_url,
+                "migration_max_agents": self.settings.llm.migration_max_agents,
+                "migration_chunk_max_agents": self.settings.llm.migration_chunk_max_agents,
+            }, ensure_ascii=False),
+        )
         return self._submit(job, resume=False)
 
-    def analysis_projects(self) -> list[dict]:
+    def analysis_projects(self, employee_id: str = "local") -> list[dict]:
         """列出 5173 已完成的可选项目静态分析，并显示是否仍可安全复用。"""
 
         result: list[dict] = []
-        for snapshot in self._analysis_store.analysis_snapshots():
+        for snapshot in self._analysis_store.analysis_snapshots(employee_id):
             item = {
                 "analysis_job_id": snapshot.job_id,
                 "project_path": str(snapshot.project_path),
@@ -169,8 +203,10 @@ class MigrationJobManager:
             result.append(item)
         return result
 
-    def _analysis_snapshot(self, analysis_job_id: str) -> StoredWebProject:
-        snapshot = self._analysis_store.get(analysis_job_id)
+    def _analysis_snapshot(
+        self, analysis_job_id: str, employee_id: str = "local"
+    ) -> StoredWebProject:
+        snapshot = self._analysis_store.get(analysis_job_id, employee_id)
         if snapshot is None or not all((
             snapshot.scan_reference,
             snapshot.analysis_reference,
@@ -216,18 +252,20 @@ class MigrationJobManager:
             ) from exc
         return root, scan, analysis
 
-    def restart(self, job_id: str) -> dict:
+    def restart(self, job_id: str, employee_id: str = "local") -> dict:
         """New isolated job: rebuild analysis and graph, retain historical output."""
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job_id in self._active:
                 raise HTTPException(409, "任务仍在运行")
             # Old analysis and semantic snapshots may be stale after source edits.
-            return self.submit(job.project_path)
+            return self.submit(
+                job.project_path, project_id=job.project_id, employee_id=employee_id
+            )
 
-    def resume(self, job_id: str) -> dict:
+    def resume(self, job_id: str, employee_id: str = "local") -> dict:
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             if job_id in self._active:
                 raise HTTPException(409, "任务仍在运行，请勿重复续跑")
             try:
@@ -262,7 +300,7 @@ class MigrationJobManager:
                 job.state, job.error = "failed", "后端正在关闭，请重启后再试"
                 self._save(job)
                 raise HTTPException(503, job.error) from exc
-            return self.status(job.job_id)
+            return self.status(job.job_id, job.employee_id)
 
     def _run(self, job: MigrationJob, resume: bool) -> None:
         try:
@@ -302,25 +340,39 @@ class MigrationJobManager:
         # owner 仅用于区分服务重启，不作为前端字段公开。
         payload = {**job.model_dump(), "owner": self._owner}
         self.artifacts.write_text(job.job_id, RECORD_NAME, json.dumps(payload, ensure_ascii=False))
+        self._control.update_job(
+            job.job_id, job.employee_id, state=job.state,
+            stage="migration", error=job.error, project_id=job.project_id,
+        )
 
-    def _get(self, job_id: str) -> MigrationJob:
+    def _get(self, job_id: str, employee_id: str | None = None) -> MigrationJob:
         try:
             job = self.artifacts.read_model(self.artifacts.reference(job_id, RECORD_NAME), MigrationJob)
         except ArtifactError as exc:
             raise HTTPException(404, "迁移任务不存在") from exc
+        if employee_id is not None and job.employee_id != employee_id:
+            raise HTTPException(404, "迁移任务不存在")
         if job.state in {"queued", "running"} and job.owner != self._owner:
             job.state = "interrupted"
             job.message = "上次服务已退出，可从未完成 WCC 续跑；无断点时请新建任务"
         return job
 
-    def projects(self) -> list[dict]:
+    def projects(self, employee_id: str = "local") -> list[dict]:
         result = []
         for path in sorted(self.artifacts.root.glob(f"*/{RECORD_NAME}"), reverse=True):
             try:
-                result.append(self.status(path.parent.name))
+                result.append(self.status(path.parent.name, employee_id))
             except HTTPException:
                 continue
         return result
+
+    def export_job(self, job_id: str, employee_id: str = "local") -> Path:
+        """Package generated Python files for the owning employee."""
+
+        self._get(job_id, employee_id)
+        target = self._control.export_path(employee_id, job_id)
+        source = self.artifacts.root / job_id / "generated-python"
+        return global_heavy_pool.run(create_export, source, target)
 
     def _states(self, job_id: str) -> list[MigrationUnitState]:
         path = self.artifacts.root / job_id / "migration-state.json"
@@ -343,9 +395,9 @@ class MigrationJobManager:
         except (ArtifactError, json.JSONDecodeError, OSError):
             return None
 
-    def status(self, job_id: str) -> dict:
+    def status(self, job_id: str, employee_id: str | None = None) -> dict:
         with self._lock:
-            job = self._get(job_id)
+            job = self._get(job_id, employee_id)
             states = self._states(job_id)
             events = self.events(job_id)
             latest = events[-1] if events else None

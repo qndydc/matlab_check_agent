@@ -6,7 +6,6 @@ Referenced By: MainWorkflow、SemanticService 和 MigrationService。
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from matlab_refactor_agent.infrastructure.artifacts import ArtifactStore
 from matlab_refactor_agent.orchestration.quality_gate import QualityGate
 from matlab_refactor_agent.orchestration.state_manager import SQLiteStateManager
 from matlab_refactor_agent.orchestration.worker_pool import WorkerPool
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 from matlab_refactor_agent.workers import CodeTreeBuilder, WorkerContext
 
 
@@ -140,8 +140,8 @@ class AnalysisPipeline:
                 range(0, len(manifest.files), self._chunk_size)
             )
         ]
-        with ThreadPoolExecutor(max_workers=self._pool.max_workers) as executor:
-            results = list(executor.map(self._execute, tasks))
+        futures = [global_heavy_pool.submit(self._execute, task) for task in tasks]
+        results = [future.result() for future in futures]
         chunk_references = [
             result.artifacts[f"parse_chunk_{index}"]
             for index, result in enumerate(results)

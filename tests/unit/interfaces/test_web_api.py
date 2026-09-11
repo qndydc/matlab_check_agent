@@ -182,7 +182,7 @@ def test_analysis_then_annotation_keeps_graph_available(tmp_path: Path) -> None:
     )
     assert created.status_code == 202
     job_id = created.json()["job_id"]
-    assert re.fullmatch(r"\d{20}", job_id)
+    assert re.fullmatch(r"\d{20}[0-9a-f]{8}", job_id)
     assert _wait(client, job_id)["graph_ready"] is True
 
     graph = client.get(f"/api/jobs/{job_id}/graph")

@@ -19,6 +19,7 @@ from matlab_refactor_agent.domain.migration import (
 from matlab_refactor_agent.infrastructure.llm import StructuredLLMClient
 from matlab_refactor_agent.infrastructure.llm.client import StreamProgressSink
 from matlab_refactor_agent.orchestration.call_lifecycle import ObservationSink
+from matlab_refactor_agent.orchestration.execution_pool import global_heavy_pool
 
 SYSTEM_PROMPT = (
     "你是 MATLAB 到 Python 迁移的 Reason Agent。输入是一个完整 WCC，SCC 不可拆分。"
@@ -64,7 +65,8 @@ class ConversionReasonAgent:
                 rationale="整条 WCC 调用链的观察项均已通过",
             )
         prompt = self.prompt(context, observation)
-        decision = self._client.complete(
+        decision = global_heavy_pool.run(
+            self._client.complete,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
             response_model=ReasonDecision,

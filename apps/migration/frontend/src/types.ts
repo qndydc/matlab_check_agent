@@ -15,6 +15,11 @@ export type Capabilities = {
   pending: string[]
 }
 
+export type EmployeeSession = {
+  employee_id: string
+  administrator: boolean
+}
+
 export type MigrationJob = {
   job_id: string
   project_path: string
